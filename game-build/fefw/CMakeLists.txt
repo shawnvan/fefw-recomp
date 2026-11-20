@@ -11,6 +11,15 @@ endif()
 project(fefw_game C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# A compiler-path change can make CMake regenerate a cache with empty Release
+# flags. Keep the runtime's exception handlers and optimized game/menu build
+# reproducible even after that cache reset.
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        add_compile_options(/O2 /Ob2 /DNDEBUG)
+    endif()
+endif()
 
 get_filename_component(FEFW_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(FEFW_LIB_DIR "${FEFW_ROOT}/work/build/fefw" CACHE PATH "folder with fefw_{main,sdk,subsdk0,subsdk1,subsdk2,rtld}.lib (recomp scripts build_game.cmd fefw)")
@@ -44,6 +53,9 @@ add_subdirectory("${FEFW_RUNTIME_DIR}" runtime)
 # library fefw_rt.lib); fefw.exe is linked on the player's PC from the libraries lifted out of their own dump and src/fefw_stub.cpp
 # (tools/build/fefw_build.py in the package, with the bundled Zig). Nothing lifted is imported here.
 option(FEFW_RT_DLL "build the runtime as fefw_rt.dll for the release package" OFF)
+if(FEFW_RT_DLL AND NXRT_DAV1D AND NOT NXRT_DAV1D_ASM)
+    message(FATAL_ERROR "FEFW_RT_DLL=ON needs NXRT_DAV1D_ASM=ON for real-time AV1 movies; install NASM 2.14+ and set NXRT_NASM")
+endif()
 if(FEFW_RT_DLL AND NOT NXRT_ASTC2BC7)
     message(FATAL_ERROR "FEFW_RT_DLL=ON needs the ASTC transcoder (NXRT_ASTC2BC7=ON): without it desktop GPUs render most textures black")
 endif()

@@ -525,6 +525,7 @@ struct OpenSlot {
 
 struct RomfsImage::Impl {
     Layout l;
+    std::vector<std::vector<BytePatch>> file_patches;
     mutable std::mutex mu;                  // guards cache, tick and read_seen
     mutable std::vector<uint8_t> read_seen; // per file: read at least once (the game's loads, in the log and the crash report)
     void note_read(uint32_t idx) const {
@@ -595,6 +596,8 @@ bool RomfsImage::build(const std::string& host_dir, std::string* err, const std:
     std::lock_guard<std::mutex> lk(p_->mu);
     p_->cache.clear();
     p_->l = ok ? std::move(fresh) : Layout{};
+    p_->file_patches.clear();
+    p_->file_patches.resize(p_->l.files.size());
     p_->read_seen.assign(p_->l.files.size(), 0);
     return ok;
 }
@@ -622,6 +625,16 @@ bool RomfsImage::read(uint64_t offset, void* dst, uint64_t len) const {
             case Segment::Kind::kFile:
                 p_->note_read(g.file);
                 if (!p_->read_host(g.file, g.src + within, out, n)) return false;
+                if (g.file < p_->file_patches.size()) {
+                    const mem::ww::OsWriteScope ws(out, n);
+                    const auto& patches = p_->file_patches[g.file];
+                    auto patch = std::lower_bound(patches.begin(), patches.end(), within,
+                                                  [](const BytePatch& p, uint64_t v) { return p.offset < v; });
+                    for (; patch != patches.end() && patch->offset - within < n; ++patch) {
+                        uint8_t& byte = out[patch->offset - within];
+                        if (byte == patch->expected) byte = patch->replacement;
+                    }
+                }
                 break;
         }
         out += n;
@@ -639,6 +652,18 @@ bool RomfsImage::file_extent(const std::string& path, uint64_t* offset, uint64_t
     const FileRec& f = L.files[it->second];
     if (offset) *offset = f.image_off;
     if (size) *size = f.size;
+    return true;
+}
+
+bool RomfsImage::set_file_byte_patches(const std::string& path, std::vector<BytePatch> patches) {
+    const Layout& L = p_->l;
+    const auto it = L.by_path.find(path);
+    if (it == L.by_path.end()) return false;
+    const FileRec& file = L.files[it->second];
+    std::sort(patches.begin(), patches.end(), [](const BytePatch& a, const BytePatch& b) { return a.offset < b.offset; });
+    for (size_t i = 0; i < patches.size(); ++i)
+        if (patches[i].offset >= file.size || (i && patches[i - 1].offset == patches[i].offset)) return false;
+    p_->file_patches[it->second] = std::move(patches);
     return true;
 }
 

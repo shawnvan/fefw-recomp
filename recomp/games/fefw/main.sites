@@ -1,4 +1,166 @@
 # hook sites of main (build DB93B0125F4850601D61C3EDDE012F8EB2ECFE77)
+# Core progression settings. Hook arithmetic in the host runtime.
+# Each replacement instruction is lifted as NOP; the inline hook replays the
+# native operation at default settings and returns to the remaining game code.
+# Native class success returns its final percentage in w8 before mov w0,w8.
+# Native rank-level lookup returns the level in w0 before its epilogue.
+# Class story-part gates: list, exam facility, and preview actor.
+inline 0x710096c6f8
+inline 0x7101889980
+inline 0x7101613534
+inline 0x710096a9b0
+inline 0x710149c0bc
+inline 0x710096a7a8
+inline 0x71015bbffc
+inline 0x710096accc
+inline 0x71008bff40
+inline 0x71008c1b98
+inline 0x7100676bac
+# Class weapon permission checks: equipment and in-battle use.
+inline 0x71006ea750
+inline 0x71006eaac8
+inline 0x71006d79f8
+inline 0x71006d9d20
+inline 0x71006d9d24
+inline 0x71006da024
+inline 0x71006da028
+inline 0x7100f89618
+inline 0x71006e26e0
+# The base game has a third difficulty value but constructs only two rows.
+# Append the native third row, then supply its empty localization entries.
+patch 0x7100a1bd20 0xa9502269 0xd503201f
+inline 0x7100a1bd20
+patch 0x7100a1cc70 0x942de05c 0xd503201f
+inline 0x7100a1cc70
+patch 0x7100a1cd04 0x94010ec7 0xd503201f
+inline 0x7100a1cd04
+patch 0x71016dbf48 0x97fae3a6 0xd503201f
+inline 0x71016dbf48
+inline 0x71008ec69c
+inline 0x7101988a04
+inline 0x71007ff60c
+patch 0x7100dbaf0c 0x97ec49a5 0xd503201f
+inline 0x7100dbaf0c
+patch 0x7101561b40 0x97cdae98 0xd503201f
+inline 0x7101561b40
+entryhook 0x7100fc2500
+patch 0x710089504c 0x0b090149 0xd503201f
+inline 0x710089504c
+# Only the two committed Gmap time-advance calls; previews keep native dates.
+patch 0x71014fa098 0x97c85d6e 0xd503201f
+inline 0x71014fa098
+patch 0x71014fa034 0x97cddd13 0xd503201f
+inline 0x71014fa034
+patch 0x7101966ec0 0x0b090149 0xd503201f
+inline 0x7101966ec0
+patch 0x71019673fc 0x0b090149 0xd503201f
+inline 0x71019673fc
+patch 0x71008b6e2c 0x0b080148 0xd503201f
+inline 0x71008b6e2c
+patch 0x71008b7490 0x0b080148 0xd503201f
+inline 0x71008b7490
+patch 0x71008b89ac 0x0b010129 0xd503201f
+inline 0x71008b89ac
+patch 0x71008f4c2c 0x0b090149 0xd503201f
+inline 0x71008f4c2c
+patch 0x71008fbf6c 0x0b0a016a 0xd503201f
+inline 0x71008fbf6c
+patch 0x7100e1e414 0x0b010129 0xd503201f
+inline 0x7100e1e414
+patch 0x71010f9ffc 0x0b130129 0xd503201f
+inline 0x71010f9ffc
+patch 0x71010fa2b4 0x0b130129 0xd503201f
+inline 0x71010fa2b4
+patch 0x71011e2fc8 0x0b130129 0xd503201f
+inline 0x71011e2fc8
+patch 0x7101278a74 0x0b010129 0xd503201f
+inline 0x7101278a74
+patch 0x7101287dc4 0x0b090149 0xd503201f
+inline 0x7101287dc4
+patch 0x71012dbaa8 0x0b0a0108 0xd503201f
+inline 0x71012dbaa8
+patch 0x71014064c0 0x0b090149 0xd503201f
+inline 0x71014064c0
+patch 0x71014e0188 0x0b090149 0xd503201f
+inline 0x71014e0188
+patch 0x71015578d8 0x0b090149 0xd503201f
+inline 0x71015578d8
+patch 0x71015693b8 0x0b0a016a 0xd503201f
+inline 0x71015693b8
+patch 0x71017378c8 0x0b090169 0xd503201f
+inline 0x71017378c8
+patch 0x710173dad4 0x1b082d48 0xd503201f
+inline 0x710173dad4
+patch 0x7101999f5c 0x0b080148 0xd503201f
+inline 0x7101999f5c
+patch 0x71019b5af4 0x0b010129 0xd503201f
+inline 0x71019b5af4
+# Existing F1 actions, reproduced as host-side guest hooks.
+entryhook 0x71008a25c0
+inline 0x71010260e0
+inline 0x71008ec500
+
+# Activity shortcuts. Keep the game's own selection, payment and commit
+# functions; the runtime only adjusts an eligible result or skips presentation.
+entryhook 0x7101621c10
+inline 0x7101452de4
+entryhook 0x71019b0b00
+inline 0x7100934b70
+entryhook 0x71019a0150
+inline 0x7101447d5c
+entryhook 0x71019b1f30
+entryhook 0x71015031e0
+entryhook 0x7100f5a5f0
+# Gmap Explore grade: replay the two native threshold instructions in runtime.
+patch 0x7101383f5c 0xb9402309 0xd503201f
+inline 0x7101383f5c
+patch 0x710138464c 0x0b090149 0xd503201f
+inline 0x710138464c
+# Activity selectors: clear only the native "used this week" reason bit.
+inline 0x7100954728
+inline 0x7100954918
+inline 0x7100954f98
+inline 0x71009559b8
+inline 0x71009561c4
+inline 0x71009563c4
+inline 0x7100956b70
+inline 0x7100956d24
+inline 0x710095711c
+inline 0x7100957308
+inline 0x7100958ad4
+inline 0x7100958fd0
+inline 0x7101426bb0
+inline 0x7101426bc8
+inline 0x7101960c20
+inline 0x7101960c34
+inline 0x71019b3258
+inline 0x71019b326c
+# Gift menu and action cooldown dates; ordinary item and relationship commits remain native.
+inline 0x7100eb2798
+inline 0x7100eb289c
+entryhook 0x710161a470
+# Native manual-save selector. The feature is enabled only in the isolated QA
+# configuration; ordinary builds retain the native Auto behavior by default.
+entryhook 0x71016da940
+entryhook 0x71016dabf0
+entryhook 0x710188b880
+entryhook 0x71008759b0
+entryhook 0x71008759a0
+entryhook 0x71016d4ae0
+entryhook 0x710169ba10
+patch 0x71016d3068 0x97c6b01e 0xd503201f
+inline 0x71016d3068
+entryhook 0x71008755b0
+entryhook 0x7100874ca0
+entryhook 0x7100874cb0
+patch 0x7100880bcc 0x97ffecd9 0xd503201f
+inline 0x7100880bcc
+patch 0x71016dc988 0x97c68796 0xd503201f
+inline 0x71016dc988
+patch 0x71016dd398 0x97c68512 0xd503201f
+inline 0x71016dd398
+patch 0x71016dd8f4 0x97c683bb 0xd503201f
+inline 0x71016dd8f4
 # frame rate (runtime games/fefw/fefw_play.cpp, [fefw] fps60): the gameplay start's target frame rate store `str w9, [x8, #0x1dc]`
 # into the graphics object (w9 = 30, from `mov w9, #0x1e` at 0x71007bf1ac)
 inline 0x71007bf1c0
@@ -63,3 +225,20 @@ inline 0x71017d90b0
 # (vtable + 0x110); the midhook draws, puts the viewport back and returns
 inline 0x7101904b5c
 midhook 0x7101904c20
+# Per-character weekly activity flames (+0x82a). Runtime intercepts only
+# stores that may consume a flame; native initialization and reset stay intact.
+inline 0x710093532c
+inline 0x710093539c
+inline 0x710093540c
+inline 0x7100954a9c
+inline 0x7101406494
+inline 0x7101406dc8
+inline 0x7101406e20
+inline 0x7101408078
+inline 0x7101437250
+inline 0x7101447e54
+inline 0x7101448b38
+inline 0x71014550d8
+inline 0x7101999b9c
+# Native System submenu row insertion.
+entryhook 0x7101714cc0

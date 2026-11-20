@@ -16,11 +16,15 @@
 // frame generation are set up once, the frame-rate hooks are installed at start) says "restart", and the row shows the value in force until
 // then; nothing pretends to be live. A key set by an environment variable (NXRT_...) wins over the file: the row says so and is locked.
 #include "fefw_game.h"
+#include "fefw_coremods.h"
+#include "fefw_actions.h"
+#include "fefw_manual.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -73,8 +77,8 @@ const ImVec4 kGreen(0.55f, 0.86f, 0.55f, 1.0f);
 const ImVec4 kRed(1.0f, 0.42f, 0.38f, 1.0f);
 const ImVec4 kAccent(0.42f, 0.78f, 0.96f, 1.0f);
 
-enum Tab { kTabDisplay, kTabGraphics, kTabFrameRate, kTabAudio, kTabControls, kTabGame, kTabDebug, kTabCount };
-constexpr const char* kTabNames[kTabCount] = {"Display", "Graphics", "Frame rate", "Audio", "Controls", "Game", "Debug"};
+enum Tab { kTabDisplay, kTabGraphics, kTabFrameRate, kTabAudio, kTabControls, kTabGame, kTabCoreMods, kTabGrowth, kTabActions, kTabDebug, kTabCount };
+constexpr const char* kTabNames[kTabCount] = {"Display", "Graphics", "Frame rate", "Audio", "Controls", "Game", "Core mods", "人物成长", "物品添加和送礼值", "Debug"};
 
 // ---- the fefw.ini keys the menu edits -------------------------------------------------------------------------------------------------
 // The value read at start is kept (boot) so a restart-only row can show what is in force and the bottom bar can list what waits.
@@ -155,6 +159,15 @@ struct Menu {
     double monitors_at = -1e9;
     std::vector<std::string> audio_devices;
     bool audio_loaded = false;
+    std::string growth_layout_pid;
+    std::array<bool, 9> growth_collapsed{};
+    double rates_reset_until = 0;
+    double growth_reset_until = 0;
+    int renown_amount = 0;
+    int renown_direction = 0;
+    int renown_confirm_from = 0;
+    int renown_confirm_to = 0;
+    double renown_confirm_until = 0;
     // Debug page
     double phase_prev[kHpCount] = {}, phase_ms[kHpCount] = {};
     uint64_t frames_prev = 0;
@@ -172,6 +185,731 @@ void notify(Menu& m, const std::string& text, bool err = false) {
     m.notice = text;
     m.notice_err = err;
     m.notice_until = ImGui::GetTime() + (err ? 8.0 : 4.0);
+}
+
+void section(const char* title);
+
+void muted_wrapped(const char* text) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", text);
+    ImGui::PopStyleColor();
+}
+
+void character_growth_page(Menu& m) {
+    const int reset_result = coremods::take_growth_reset_result();
+    if (reset_result == 1) notify(m, "当前存档的人物独立补正已复位；请在游戏内保存。");
+    else if (reset_result == -1) notify(m, "人物独立补正未能全部复位；请检查并重试。", true);
+    section("全局成长设置");
+    bool growth_enabled = coremods::adjustments_enabled(coremods::AdjustmentPage::Growth);
+    if (ImGui::Checkbox("启用本页成长补正", &growth_enabled)) {
+        std::string error;
+        if (!coremods::set_adjustments_enabled(coremods::AdjustmentPage::Growth, growth_enabled, &error))
+            notify(m, "无法保存成长补正开关：" + error, true);
+    }
+    ImGui::TextDisabled("关闭后按原版成长率结算；全局和人物独立补正数值保留，重新开启即可恢复。成长方式仍由下方单独选择。");
+    const bool growth_reset_armed = ImGui::GetTime() < m.growth_reset_until;
+    if (ImGui::Button(growth_reset_armed ? "再次点击，确认复位##growth_reset" : "复位本页成长补正##growth_reset")) {
+        if (growth_reset_armed) {
+            std::string error;
+            if (!coremods::set(coremods::Setting::GrowthBonus, 0, &error))
+                notify(m, "无法复位全局成长补正：" + error, true);
+            else if (coremods::growth_characters().empty())
+                notify(m, "全局成长补正已复位；载入存档后可复位人物独立补正。");
+            else if (!coremods::reset_growth_bonuses())
+                notify(m, "全局补正已复位，但人物独立补正未能复位。", true);
+            else
+                notify(m, "正在复位当前存档的人物独立补正……");
+            m.growth_reset_until = 0;
+        } else {
+            m.growth_reset_until = ImGui::GetTime() + 8.0;
+        }
+    }
+    if (ImGui::GetTime() < m.growth_reset_until)
+        ImGui::TextColored(kAccent, "再次点击将清除全局和当前存档所有人物的独立补正；成长方式与本页开关不变。");
+    ImGui::TextWrapped("① 成长方式决定升级如何结算，作用于所有我方人物，不改变成长率。选择「使用游戏原设置」时，按当前游戏存档原有方式结算。");
+    const char* modes[] = {"使用游戏原设置", "随机成长", "固定成长"};
+    int mode = coremods::get(coremods::Setting::GrowthMode) + 1;
+    ImGui::TextUnformatted("成长方式");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::Combo("##growth_mode", &mode, modes, IM_ARRAYSIZE(modes))) {
+        std::string error;
+        if (!coremods::set(coremods::Setting::GrowthMode, mode - 1, &error))
+            notify(m, "无法保存成长方式：" + error, true);
+    }
+    int global_bonus = coremods::configured(coremods::Setting::GrowthBonus);
+    ImGui::Text("全局成长补正：%+d 百分点%s", global_bonus, growth_enabled ? "" : "（已停用）");
+    if (global_bonus == 0 || !growth_enabled) {
+        ImGui::SameLine();
+        ImGui::TextColored(kAccent, "原版补正%s", growth_enabled ? "" : "（本页开关已关闭）");
+    }
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::BeginDisabled(!growth_enabled);
+    if (ImGui::SliderInt("##global_growth_bonus", &global_bonus,
+                         coremods::minimum(coremods::Setting::GrowthBonus),
+                         coremods::maximum(coremods::Setting::GrowthBonus))) {
+        std::string error;
+        if (!coremods::set(coremods::Setting::GrowthBonus, global_bonus, &error))
+            notify(m, "无法保存全局成长补正：" + error, true);
+    }
+    ImGui::EndDisabled();
+    ImGui::TextWrapped("② 全局补正是默认值：普通属性加 X 个百分点，HP 加 2X。它与成长方式是两项独立设置，均由本机所有存档共用。");
+    const auto preview = coremods::growth_selection();
+    if (preview.loaded && preview.rates_loaded) {
+        ImGui::TextColored(kAccent, "按 %s 当前职业估算：", coremods::growth_character_label(preview.pid).c_str());
+        ImGui::TextDisabled("下列数值是全局补正至少需达到的百分点；只对“沿用全局”的属性生效，且受属性上限限制。");
+        constexpr const char* preview_stats[] = {"HP", "力量", "魔力", "技巧", "速度", "幸运", "防守", "魔防", "魅力"};
+        const auto threshold = [](int base, int factor, int target) {
+            const int delta = target - base;
+            const int needed = delta >= 0 ? (delta + factor - 1) / factor : delta / factor;
+            if (needed > 100) return std::string("超出上限");
+            if (needed < -100) return std::string("任意值");
+            char result[24];
+            std::snprintf(result, sizeof result, "%+d", needed);
+            return std::string(result);
+        };
+        const int preview_columns = ImGui::GetContentRegionAvail().x >= px(760) ? 2 : 1;
+        if (ImGui::BeginTable("growth_preview", preview_columns, ImGuiTableFlags_SizingStretchSame)) {
+        for (int stat = 0; stat < 9; ++stat) {
+            ImGui::TableNextColumn();
+            const int base = preview.personal[stat] + preview.job[stat];
+            const int factor = stat == 0 ? 2 : 1;
+            const std::string one = threshold(base, factor, 100);
+            const std::string two = threshold(base, factor, 200);
+            const bool independent = preview.bonus[stat] != INT_MAX;
+            const char* one_label = mode == 2 ? "每级 +1 至少" : "合计 100%% 至少";
+            const char* two_label = mode == 2 ? "每级 +2 至少" : "合计 200%% 至少";
+            if (independent)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s（原值 %d%%%s）：%s %s；%s %s",
+                               preview_stats[stat], base, independent ? "，独立，若改沿用全局" : "",
+                               one_label, one.c_str(), two_label, two.c_str());
+            if (independent) ImGui::PopStyleColor();
+        }
+        ImGui::EndTable();
+        }
+    } else {
+        ImGui::TextDisabled("载入存档并选定角色后，在这里显示各属性达到 100%%／200%% 所需的全局补正。");
+    }
+    ImGui::Spacing();
+    section("当前存档的人物成长");
+    ImGui::TextWrapped("③ 每个属性默认沿用全局补正：滑块展开显示但不可拖动。取消「沿用全局」后可单独调整；独立值替代该属性的全局值，HP 独立值也只加一次。勾回「沿用全局」可收起滑块。");
+    ImGui::TextWrapped("个人原值 + 当前职业补正 + 当前采用的补正 = 本页合计成长率。关闭本页补正时，当前采用的补正为 0。恰好 100%% 表示升级该项必定 +1（未达属性上限）；固定成长每累计 100%% 增加 1 点。只影响后续升级，独立补正随游戏内保存写入当前存档。");
+    const auto roster = coremods::growth_characters();
+    auto selection = coremods::growth_selection();
+    if (roster.empty()) {
+        ImGui::TextDisabled("载入游戏存档并等待人物列表出现。");
+        return;
+    }
+    if (selection.pid.empty()) {
+        coremods::select_growth_character(roster.front().pid);
+        selection = coremods::growth_selection();
+    }
+    if (m.growth_layout_pid != selection.pid) {
+        m.growth_layout_pid = selection.pid;
+        m.growth_collapsed.fill(false);
+    }
+    std::string selected_label = coremods::growth_character_label(selection.pid);
+    for (const auto& person : roster)
+        if (person.pid == selection.pid) selected_label = person.label;
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##growth_character", selected_label.c_str())) {
+        for (const auto& person : roster) {
+            const bool active = person.pid == selection.pid;
+            if (ImGui::Selectable(person.label.c_str(), active))
+                coremods::select_growth_character(person.pid);
+            if (active) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    if (!selection.loaded) {
+        ImGui::TextDisabled("正在读取当前存档中的人物补正……");
+        return;
+    }
+    if (!selection.rates_loaded)
+        ImGui::TextDisabled("当前人物的原版成长数据暂不可读取；补正仍可调整。");
+    constexpr const char* stats[] = {"HP", "力量", "魔力", "技巧", "速度", "幸运", "防守", "魔防", "魅力"};
+    const int growth_columns = ImGui::GetContentRegionAvail().x >= px(900) ? 2 : 1;
+    if (ImGui::BeginTable("growth_attributes", growth_columns, ImGuiTableFlags_SizingStretchSame)) {
+    for (int stat = 0; stat < 9; ++stat) {
+        ImGui::TableNextColumn();
+        ImGui::PushID(stat);
+        ImGui::Separator();
+        ImGui::TextUnformatted(stats[stat]);
+        bool inherited = selection.bonus[stat] == INT_MAX;
+        const int inherited_bonus = global_bonus * (stat == 0 ? 2 : 1);
+        int own_bonus = inherited ? inherited_bonus : selection.bonus[stat];
+        ImGui::SameLine();
+        bool requested = inherited;
+        ImGui::BeginDisabled(!growth_enabled);
+        if (ImGui::Checkbox("沿用全局", &requested)) {
+            const int next = requested ? INT_MAX : inherited_bonus;
+            if (!coremods::set_growth_bonus(selection.pid, stat, next)) {
+                notify(m, "无法保存人物成长补正。", true);
+            } else {
+                inherited = requested;
+                own_bonus = inherited_bonus;
+                m.growth_collapsed[stat] = requested;
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s %+d 百分点", inherited ? "全局" : "独立", own_bonus);
+        if (own_bonus == 0 || !growth_enabled) {
+            if (growth_enabled) ImGui::SameLine();
+            ImGui::TextColored(kAccent, "原版补正%s", growth_enabled ? "" : "（本页开关已关闭）");
+        }
+        if (!m.growth_collapsed[stat]) {
+            int bonus = own_bonus;
+            const float available = ImGui::GetContentRegionAvail().x;
+            const float preset_width = ImGui::CalcTextSize("设为 100%").x + 2 * ImGui::GetStyle().FramePadding.x;
+            const bool buttons_inline = selection.rates_loaded && available >= px(440);
+            const float button_space = 2 * preset_width + 2 * ImGui::GetStyle().ItemSpacing.x;
+            ImGui::SetNextItemWidth(buttons_inline ? available - button_space : -FLT_MIN);
+            ImGui::BeginDisabled(inherited || !growth_enabled);
+            if (ImGui::SliderInt("##growth_bonus", &bonus, -1000, 1000)) {
+                if (!coremods::set_growth_bonus(selection.pid, stat, bonus))
+                    notify(m, "无法保存人物成长补正。", true);
+                else own_bonus = bonus;
+            }
+            if (selection.rates_loaded) {
+                for (int target : {100, 200}) {
+                    if (buttons_inline || target == 200) ImGui::SameLine();
+                    ImGui::PushID(target);
+                    char label[32];
+                    std::snprintf(label, sizeof label, "设为 %d%%", target);
+                    const int desired = target - selection.personal[stat] - selection.job[stat];
+                    if (ImGui::SmallButton(label) && desired >= -1000 && desired <= 1000) {
+                        if (!coremods::set_growth_bonus(selection.pid, stat, desired))
+                            notify(m, "无法保存人物成长补正。", true);
+                        else own_bonus = desired;
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndDisabled();
+        }
+        if (selection.rates_loaded) {
+            const int active_bonus = growth_enabled ? own_bonus : 0;
+            const int raw = selection.personal[stat] + selection.job[stat] + active_bonus;
+            const int total = std::max(0, raw);
+            ImGui::TextWrapped("个人 %d%% + 当前职业 %+d%% + %s补正 %+d = 合计 %d%%",
+                               selection.personal[stat], selection.job[stat],
+                               growth_enabled ? (inherited ? "全局" : "独立") : "原版", active_bonus, total);
+            // Keep the result on its own wrapped line inside the attribute cell.
+            if (raw < 0)
+                ImGui::TextDisabled("原始合计 %d%%；游戏最低按 0%%", raw);
+            else if (total < 100)
+                ImGui::TextDisabled("距 100%% 还差 %d 个百分点", 100 - total);
+            else {
+                const bool exact_one = total == 100;
+                const bool exact_fixed = mode == 2 && total % 100 == 0;
+                ImGui::PushStyleColor(ImGuiCol_Text, exact_one || exact_fixed ? kGreen : kAccent);
+                if (exact_one)
+                    ImGui::TextWrapped("恰好 100%%：升级必定 +1（未达属性上限）");
+                else if (exact_fixed)
+                    ImGui::TextWrapped("固定成长：每级 +%d（未达属性上限）", total / 100);
+                else
+                    ImGui::TextWrapped("已达到 100%% 门槛");
+                ImGui::PopStyleColor();
+            }
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+    }
+    ImGui::TextDisabled("人物成长率为 0 时，游戏会改用职业基础成长率；上方职业项包含这部分。其他临时规则及属性上限仍由游戏处理。");
+}
+
+void renown_controls(Menu& m) {
+    section("当前存档声望");
+    if (!coremods::renown_available()) {
+        m.renown_confirm_until = 0;
+        ImGui::TextDisabled("读取存档后可调整声望。");
+    } else {
+        const int limit = std::min(coremods::renown_cap(), 10800);
+        int current = coremods::renown_current();
+        ImGui::Text("当前声望：%d / %d", current, limit);
+        int slider_value = current;
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::SliderInt("##renown", &slider_value, 0, limit)) {
+            if (coremods::set_renown(slider_value)) {
+                current = slider_value;
+                m.renown_confirm_until = 0;
+            } else {
+                notify(m, "声望调整失败；请重新读取存档后重试。", true);
+            }
+        }
+        const char* directions[] = {"增加", "减少"};
+        ImGui::SetNextItemWidth(px(110));
+        if (ImGui::Combo("##renown_direction", &m.renown_direction, directions, IM_ARRAYSIZE(directions)))
+            m.renown_confirm_until = 0;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(px(150));
+        if (ImGui::InputInt("##renown_amount", &m.renown_amount, 0, 0)) {
+            m.renown_amount = std::clamp(m.renown_amount, 0, 10800);
+            m.renown_confirm_until = 0;
+        }
+        const int64_t target = static_cast<int64_t>(current) +
+                               (m.renown_direction == 0 ? m.renown_amount : -m.renown_amount);
+        const bool valid = m.renown_amount > 0 && target >= 0 && target <= limit;
+        const double now = ImGui::GetTime();
+        if (now >= m.renown_confirm_until || current != m.renown_confirm_from ||
+            target != m.renown_confirm_to || !valid)
+            m.renown_confirm_until = 0;
+        const bool armed = m.renown_confirm_until > now;
+        ImGui::SameLine();
+        if (ImGui::Button(armed ? "再次点击确定##renown_confirm" : "确定##renown_confirm")) {
+            if (!valid) {
+                notify(m, m.renown_direction == 0 ?
+                       "增加后不能超过当前章节上限或 10800。" : "减少后不能低于 0。", true);
+            } else if (armed) {
+                if (coremods::set_renown(static_cast<int>(target)))
+                    notify(m, "声望已调整；请在游戏内保存当前存档。");
+                else
+                    notify(m, "声望调整失败；请重新读取存档后重试。", true);
+                m.renown_confirm_until = 0;
+            } else {
+                m.renown_confirm_from = current;
+                m.renown_confirm_to = static_cast<int>(target);
+                m.renown_confirm_until = now + 8.0;
+            }
+        }
+        if (m.renown_confirm_until > now)
+            ImGui::TextColored(kAccent, "当前 %d → %d；再次点击「确定」才会生效。", current, m.renown_confirm_to);
+        else if (m.renown_amount > 0 && !valid)
+            ImGui::TextColored(kRed, "本次调整超出 0～%d 范围，请修改数量。", limit);
+        else
+            ImGui::TextDisabled("滑块直接设定总值；输入框按数量增减并需二次确认。仅修改当前存档，最高 10800。");
+    }
+}
+
+void coremods_page(Menu& m) {
+    renown_controls(m);
+    ImGui::Spacing();
+    ImGui::TextWrapped("经验倍率和转职等补正由本 PC 安装的所有存档共用；成长方式和成长率在「人物成长」页。上方声望只修改当前存档。");
+    ImGui::Spacing();
+    section("倍率与补正");
+    bool rates_enabled = coremods::adjustments_enabled(coremods::AdjustmentPage::Rates);
+    if (ImGui::Checkbox("启用本页倍率与补正", &rates_enabled)) {
+        std::string error;
+        if (!coremods::set_adjustments_enabled(coremods::AdjustmentPage::Rates, rates_enabled, &error))
+            notify(m, "无法保存倍率与补正开关：" + error, true);
+    }
+    ImGui::TextDisabled("关闭后暂时按游戏原版数值结算；下方滑块原值保留，重新开启即可恢复。声望和其他独立开关不受影响。");
+    ImGui::TextDisabled("倍率滑块直接显示倍数：1 为原版，0 为零，负数按负倍率计算。大地图移动的 0 为原版一回合。");
+    ImGui::TextDisabled("人物支援倍率的原版 1 倍位于滑块正中；0 倍不会增加支援值。");
+    const coremods::Setting active[] = {
+        coremods::Setting::Experience,
+        coremods::Setting::ClassMastery,
+        coremods::Setting::Support,
+        coremods::Setting::Mount, coremods::Setting::Weapon,
+        coremods::Setting::Skill, coremods::Setting::Fragment,
+        coremods::Setting::Money, coremods::Setting::MoveCost,
+        coremods::Setting::ClassSuccessBonus,
+        coremods::Setting::ClassLevelAdjustment,
+    };
+    const bool rates_reset_armed = ImGui::GetTime() < m.rates_reset_until;
+    if (ImGui::Button(rates_reset_armed ? "再次点击，确认复位##rates_reset" : "复位本页倍率与补正##rates_reset")) {
+        if (rates_reset_armed) {
+            bool success = true;
+            std::string error;
+            for (coremods::Setting setting : active) {
+                const int native = setting <= coremods::Setting::Money ? 5 :
+                                   setting == coremods::Setting::MoveCost ? 20 : 0;
+                if (coremods::configured(setting) != native && !coremods::set(setting, native, &error)) {
+                    success = false;
+                    break;
+                }
+            }
+            notify(m, success ? "本页倍率与补正已恢复游戏原版数值。" : "复位未完成：" + error, !success);
+            m.rates_reset_until = 0;
+        } else {
+            m.rates_reset_until = ImGui::GetTime() + 8.0;
+        }
+    }
+    if (ImGui::GetTime() < m.rates_reset_until)
+        ImGui::TextColored(kAccent, "再次点击将把本页全部倍率与补正恢复原版；本页开关及其他功能不变。");
+    const int rate_columns = ImGui::GetContentRegionAvail().x >= px(760) ? 2 : 1;
+    if (ImGui::BeginTable("rate_controls", rate_columns, ImGuiTableFlags_SizingStretchSame)) {
+    for (coremods::Setting setting : active) {
+        ImGui::TableNextColumn();
+        int value = coremods::configured(setting);
+        ImGui::PushID(static_cast<int>(setting));
+        ImGui::TextUnformatted(coremods::label(setting));
+        if (setting == coremods::Setting::ClassSuccessBonus) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%+d 百分点", value);
+        } else if (setting == coremods::Setting::ClassLevelAdjustment) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%+d 级", value);
+        } else if (setting == coremods::Setting::MoveCost) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%.2f 倍%s", value / 20.0f, rates_enabled ? "" : "（已停用）");
+        } else {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%.1f 倍%s", value / 5.0f, rates_enabled ? "" : "（已停用）");
+        }
+        const bool multiplier = setting <= coremods::Setting::Money;
+        const bool move = setting == coremods::Setting::MoveCost;
+        const int native_value = multiplier ? 5 : move ? 20 : 0;
+        if (value == native_value || !rates_enabled) {
+            ImGui::SameLine();
+            ImGui::TextColored(kAccent, "原版%s", rates_enabled ? "" : "（本页开关已关闭）");
+        }
+        // Existing configuration remains in fifths. A drag writes whole
+        // multiples; the old fractional value is preserved until then.
+        const bool support = setting == coremods::Setting::Support;
+        int slider = multiplier ? static_cast<int>(std::lround(value / 5.0)) :
+                     move ? (value <= 20 ? static_cast<int>(std::lround((value - 20) / 2.0))
+                                         : static_cast<int>(std::lround((value - 20) / 18.0))) : value;
+        if (support) slider -= 1; // The native 1x value sits at the visual midpoint.
+        const int lo = multiplier ? coremods::minimum(setting) / 5 : move ? -10 : coremods::minimum(setting);
+        const int hi = multiplier ? coremods::maximum(setting) / 5 : move ? 10 : coremods::maximum(setting);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::BeginDisabled(!rates_enabled);
+        const bool changed = ImGui::SliderInt("##value", &slider, support ? -11 : lo,
+                                              support ? 11 : hi, support ? " " : "%d");
+        if (support) {
+            const int shown = std::min(10, slider + 1);
+            char number[16];
+            std::snprintf(number, sizeof number, "%d", shown);
+            const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            const ImVec2 size = ImGui::CalcTextSize(number);
+            ImGui::GetWindowDrawList()->AddText(ImVec2((a.x + b.x - size.x) * 0.5f,
+                                                       (a.y + b.y - size.y) * 0.5f),
+                                                ImGui::GetColorU32(ImGuiCol_Text), number);
+        }
+        ImGui::EndDisabled();
+        if (changed) {
+            value = multiplier ? (support ? std::min(10, slider + 1) : slider) * 5 :
+                    move ? (slider <= 0 ? 20 + slider * 2 : 20 + slider * 18) : slider;
+            std::string error;
+            if (!coremods::set(setting, value, &error)) notify(m, "Could not save setting: " + error, true);
+        }
+        if (setting == coremods::Setting::Experience)
+            muted_wrapped("仅调整我方人物原本为正的等级经验；等级上限仍由游戏处理。");
+        if (setting == coremods::Setting::ClassMastery)
+            muted_wrapped("单独调整职业精通经验；与兵种技能熟练度分开，精通上限仍由游戏处理。");
+        if (setting == coremods::Setting::MoveCost)
+            muted_wrapped("0＝原版每次 1 回合；−10＝不消耗，＋10＝10 倍。左侧每格减 0.1 倍，右侧每格加 0.9 倍；不足一回合的部分记在当前存档，后续移动继续累计。");
+        if (setting == coremods::Setting::ClassSuccessBonus)
+            muted_wrapped("原成功率加减百分点，结果限制在 0～100%；无效资格仍按游戏原规则处理。");
+        if (setting == coremods::Setting::ClassLevelAdjustment)
+            muted_wrapped("调整考试成功率计算使用的等级基准；页面“推荐LV”仍显示原版数值。");
+        if (setting == coremods::Setting::ClassLevelAdjustment)
+            muted_wrapped("名声等级等报名条件保持原规则。");
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+    }
+    bool special_count = coremods::get(coremods::Setting::SpecialClassCount) != 0;
+    if (ImGui::Checkbox("解除特殊职业人数限制", &special_count)) {
+        std::string error;
+        if (!coremods::set(coremods::Setting::SpecialClassCount, special_count ? 1 : 0, &error))
+            notify(m, "Could not save special class setting: " + error, true);
+    }
+    ImGui::SameLine();
+    bool class_chapter_unlock = coremods::get(coremods::Setting::ClassChapterUnlock) != 0;
+    if (ImGui::Checkbox("解除转职章节限制", &class_chapter_unlock)) {
+        std::string error;
+        if (!coremods::set(coremods::Setting::ClassChapterUnlock, class_chapter_unlock ? 1 : 0, &error))
+            notify(m, "无法保存转职章节设置：" + error, true);
+    }
+    ImGui::TextDisabled("人数上限：仍须取得特殊职业资格。章节限制：第一部可查看并报考最高级职业；等级、熟练度、证书和成功率按原规则。默认关闭。");
+    ImGui::Spacing();
+    section("步兵系职业武器与战技");
+    bool remove_weapon_restrictions = coremods::get(coremods::Setting::RemoveWeaponRestrictions) != 0;
+    if (ImGui::Checkbox("解锁步兵系职业武器/战技限制", &remove_weapon_restrictions)) {
+        std::string error;
+        if (!coremods::set(coremods::Setting::RemoveWeaponRestrictions,
+                           remove_weapon_restrictions ? 1 : 0, &error))
+            notify(m, "无法保存职业武器限制设置：" + error, true);
+        else
+            notify(m, "职业武器设置已保存；重启游戏后完整生效。");
+    }
+    ImGui::TextDisabled("仅解锁步兵系职业对剑、枪、斧、弓、手甲的许可与对应战技。骑兵、飞行系、战车及其下马形态保持原版许可；重启游戏后生效。武器自身条件仍按原规则。");
+    ImGui::Spacing();
+    section("出击人数");
+    const int deployment_limit = coremods::configured(coremods::Setting::DeploymentLimit);
+    static int deployment_draft = -1;
+    if (deployment_draft < 0) deployment_draft = deployment_limit;
+    ImGui::TextUnformatted("自选出击名额");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(px(110));
+    if (ImGui::InputInt("##deployment_draft", &deployment_draft, 0, 0))
+        deployment_draft = std::clamp(deployment_draft, 6, 25);
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##deployment_up", ImGuiDir_Up))
+        deployment_draft = std::min(25, deployment_draft + 1);
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##deployment_down", ImGuiDir_Down))
+        deployment_draft = std::max(6, deployment_draft - 1);
+    ImGui::SameLine();
+    if (ImGui::Button("确定##deployment")) {
+        std::string error;
+        if (!coremods::set(coremods::Setting::DeploymentLimit, deployment_draft, &error))
+            notify(m, "无法保存出击人数：" + error, true);
+        else
+            notify(m, "出击人数已保存；重启游戏后生效。");
+    }
+    if (deployment_draft != deployment_limit)
+        ImGui::TextColored(kAccent, "尚未保存；点击「确定」后才会记录这个人数。");
+    if (deployment_limit == 6)
+        ImGui::TextColored(kAccent, "当前已保存：原版 6 人设置；各关使用原本的自选名额。");
+    else
+        ImGui::TextDisabled("当前已保存：自选目标 %d 人。固定角色和 GUEST 占用总出场名额。", deployment_limit);
+    ImGui::TextDisabled("总出场最多 25 人；原版人数更多的关卡保持原样。点击确定后重启游戏生效，战前存档无需重建。");
+    ImGui::Spacing();
+    section("招募门槛");
+    bool recruit_level_one = coremods::get(coremods::Setting::RecruitLevelOne) != 0;
+    if (ImGui::Checkbox("新入队角色从 1 级培养", &recruit_level_one)) {
+        std::string error;
+        if (!coremods::set(coremods::Setting::RecruitLevelOne, recruit_level_one ? 1 : 0, &error))
+            notify(m, "无法保存入队等级设置：" + error, true);
+    }
+    ImGui::TextDisabled("只影响开启后首次加入的新队员；红花、亚历珊德拉、伊欧保持原等级与职业。默认关闭。");
+    ImGui::Spacing();
+    section("无限消耗开关");
+    const coremods::Setting unlimited[] = {
+        coremods::Setting::InfiniteWeapons, coremods::Setting::InfiniteMagic,
+        coremods::Setting::InfiniteMedicine, coremods::Setting::InfiniteFood,
+    };
+    const int switch_columns = ImGui::GetContentRegionAvail().x >= 680.0f ? 2 : 1;
+    const int unlimited_columns = ImGui::GetContentRegionAvail().x >= px(760) ? 4 : switch_columns;
+    if (ImGui::BeginTable("unlimited_switches", unlimited_columns, ImGuiTableFlags_SizingStretchSame)) {
+        for (coremods::Setting setting : unlimited) {
+            ImGui::TableNextColumn();
+            bool enabled = coremods::get(setting) != 0;
+            ImGui::PushID(static_cast<int>(setting));
+            if (ImGui::Checkbox(coremods::label(setting), &enabled)) {
+                std::string error;
+                if (!coremods::set(setting, enabled ? 1 : 0, &error))
+                    notify(m, "Could not save switch: " + error, true);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("药品仅限普通回复、解毒及加护道具；食材不含鱼饵、试供种和任务物品。");
+    ImGui::TextDisabled("开关默认关闭；请在独立测试存档逐项验证消耗和存档读回。");
+    ImGui::Spacing();
+    section("活动快捷与完美评价");
+    const coremods::Setting activities[] = {
+        coremods::Setting::QuickBird, coremods::Setting::QuickMeal,
+        coremods::Setting::QuickTraining, coremods::Setting::QuickCapture,
+        coremods::Setting::QuickService, coremods::Setting::PerfectExplore,
+    };
+    const int activity_columns = ImGui::GetContentRegionAvail().x >= 1050.0f ? 3 : switch_columns;
+    if (ImGui::BeginTable("quick_activities", activity_columns, ImGuiTableFlags_SizingStretchSame)) {
+        for (coremods::Setting setting : activities) {
+            ImGui::TableNextColumn();
+            bool enabled = coremods::get(setting) != 0;
+            ImGui::PushID(static_cast<int>(setting));
+            if (ImGui::Checkbox(coremods::label(setting), &enabled)) {
+                std::string error;
+                if (!coremods::set(setting, enabled ? 1 : 0, &error))
+                    notify(m, "Could not save activity switch: " + error, true);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("仍需按游戏规则选择活动并支付费用或材料；野外探索只改变评价。默认关闭。");
+    if (ImGui::BeginTable("activity_rules", switch_columns, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextColumn();
+        bool unlimited_weekly = coremods::get(coremods::Setting::UnlimitedWeeklyActivities) != 0;
+        if (ImGui::Checkbox("训练、用餐、侍奉和送礼不限每周次数", &unlimited_weekly)) {
+            std::string error;
+            if (!coremods::set(coremods::Setting::UnlimitedWeeklyActivities, unlimited_weekly ? 1 : 0, &error))
+                notify(m, "无法保存每周次数设置：" + error, true);
+        }
+        ImGui::TableNextColumn();
+        bool preserve_flames = coremods::get(coremods::Setting::PreserveActivityFlames) != 0;
+        if (ImGui::Checkbox("角色每周三格活动次数不消耗", &preserve_flames)) {
+            std::string error;
+            if (!coremods::set(coremods::Setting::PreserveActivityFlames, preserve_flames ? 1 : 0, &error))
+                notify(m, "无法保存角色活动次数设置：" + error, true);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("活动仍扣费用和材料；已用掉的角色次数不会补回。默认关闭。");
+    ImGui::Spacing();
+    section("手动存档栏位");
+    bool ten_slots = config_get_int("coremods", "manual_slots", 0) == 1;
+    if (ImGui::Checkbox("启用十个手动存档栏位", &ten_slots)) {
+        std::string error;
+        if (config_write("coremods", "manual_slots", ten_slots ? "1" : "0", &error))
+            notify(m, "存档栏位设置已保存；重启游戏后生效。");
+        else
+            notify(m, "无法保存存档栏位设置：" + error, true);
+    }
+    if (ten_slots != manual::enabled())
+        ImGui::TextDisabled("当前仍按重启前的设置运行；请先退出游戏，再重新启动。");
+    ImGui::TextDisabled("关闭后额外的手动存档不会被删除；重新开启并重启后可再次看到。");
+    ImGui::Spacing();
+    section("当前存档难度");
+    bool difficulty_switch = config_get_int("coremods", "difficulty_switch", 0) == 1;
+    if (ImGui::Checkbox("允许在因果祭坛切换难度与轻松／经典模式", &difficulty_switch)) {
+        std::string error;
+        if (config_write("coremods", "difficulty_switch", difficulty_switch ? "1" : "0", &error))
+            notify(m, "存档难度开关已保存；重启游戏后生效。");
+        else
+            notify(m, "无法保存存档难度开关：" + error, true);
+    }
+    if (difficulty_switch != manual::difficulty_switch_enabled())
+        ImGui::TextDisabled("当前仍按重启前的设置运行；请先退出游戏，再重新启动。");
+    ImGui::TextDisabled("开启后在据点因果祭坛的“更改难度”中先选普通／困难／超难，再选轻松或经典；再次选择同一模式确认。");
+    ImGui::TextDisabled("关闭时保留游戏原版只能降低难度的规则。更改后请手动保存；从下一场战斗生效。");
+    ImGui::TextDisabled("轻松与经典决定之后的阵亡规则；此前永久阵亡的队友不会复活。不同存档可分别保存这两项。");
+    ImGui::Spacing();
+    section("原生系统菜单");
+    bool native_quit = config_get_int("coremods", "native_quit", 0) == 1;
+    if (ImGui::Checkbox("显示结束游戏选项", &native_quit)) {
+        std::string error;
+        if (config_write("coremods", "native_quit", native_quit ? "1" : "0", &error))
+            notify(m, "结束游戏选项设置已保存；重启游戏后生效。");
+        else
+            notify(m, "无法保存结束游戏选项设置：" + error, true);
+    }
+    ImGui::TextDisabled("在游戏内系统菜单显示结束游戏；选择后需再次确认。默认关闭。");
+    ImGui::Spacing();
+}
+
+void actions_page(Menu& m) {
+    static char search[256]{};
+    static char iid[256]{};
+    static std::map<std::string, std::string> selected_items;
+    static int quantity = 1, gift_amount = 500;
+    static int category = -1;
+    constexpr std::array<const char*, 8> category_names = {
+        "武器", "烹饪材料", "强化材料", "礼物", "经验书与属性道具", "其他",
+        "敌人专属未知道具，无法添加", "魔法技能，无法添加"};
+    const auto& catalog = actions::item_catalog();
+    section("添加物品");
+    ImGui::TextWrapped("可跨分类勾选多种物品，设置每种的数量后直接入库。任务物品请谨慎添加。");
+    ImGui::TextDisabled("魔法技能和怪物武器在下方单独分类；其余灰色条目是剧情／教程专用记录，不能直接入库。");
+    if (catalog.empty()) ImGui::TextDisabled("物品目录不可用：mods/item-add/items.json");
+    if (category >= 0) {
+        if (ImGui::Button("返回分类")) { category = -1; search[0] = '\0'; }
+        if (category >= 0) {
+            ImGui::SameLine();
+            ImGui::TextUnformatted(category_names[category]);
+        }
+    }
+    if (category == static_cast<int>(actions::ItemCategory::Unavailable))
+        ImGui::TextWrapped("这里收录怪物的攻击和专用武器资料，包括钩爪、大颚等；游戏拒绝将其放入玩家背包，因此只能查阅，不能勾选。");
+    if (category == static_cast<int>(actions::ItemCategory::MagicUnavailable))
+        ImGui::TextWrapped("这些是角色使用的魔法技能，不是普通背包物品；可查阅，但不能通过物品入库按钮添加。");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##item_search", "搜索中文、日文名称或 IID；在分类首页搜索全部物品", search, sizeof(search));
+    const bool browsing = category >= 0 || search[0] != '\0';
+    if (!browsing) {
+        std::array<int, category_names.size()> counts{};
+        for (const auto& item : catalog) ++counts[static_cast<size_t>(item.category)];
+        const float category_width = std::min(px(440),
+            (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
+        for (size_t i = 0; i < category_names.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            const std::string label = std::string(category_names[i]) + " (" + std::to_string(counts[i]) + ")";
+            if (ImGui::Button(label.c_str(), ImVec2(category_width, 0))) category = static_cast<int>(i);
+            if (i % 2 == 0 && i + 1 < category_names.size()) ImGui::SameLine();
+            ImGui::PopID();
+        }
+        ImGui::TextDisabled("共 %zu 件；也可以在上方直接搜索全部物品。", catalog.size());
+    } else {
+        std::string needle = search;
+        std::transform(needle.begin(), needle.end(), needle.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::vector<const actions::Item*> matches;
+        matches.reserve(catalog.size());
+        for (const auto& item : catalog) {
+            if (category >= 0 && static_cast<int>(item.category) != category) continue;
+            if (!needle.empty()) {
+                std::string haystack = item.search_text;
+                std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (haystack.find(needle) == std::string::npos) continue;
+            }
+            matches.push_back(&item);
+        }
+        ImGui::TextDisabled("找到 %zu 件物品", matches.size());
+        if (ImGui::BeginChild("##item_results", ImVec2(0, px(240)), ImGuiChildFlags_Borders)) {
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(matches.size()));
+            while (clipper.Step()) {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+                    const auto& item = *matches[i];
+                    ImGui::PushID(item.iid.c_str());
+                    const std::string label = (item.name.empty() ? item.iid : item.name) +
+                        "  (" + item.iid + ")";
+                    ImGui::BeginDisabled(!item.can_add);
+                    if (ImGui::Selectable(label.c_str(), selected_items.count(item.iid) != 0)) {
+                        if (selected_items.erase(item.iid) == 0) {
+                            if (selected_items.size() >= 25)
+                                notify(m, "一次最多选择 25 种物品。", true);
+                            else
+                                selected_items.emplace(item.iid, item.name.empty() ? item.iid : item.name);
+                        }
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::PopID();
+                }
+            }
+        }
+        ImGui::EndChild();
+    }
+    ImGui::InputText("手动输入物品编号（IID）", iid, sizeof(iid));
+    if (ImGui::Button("将编号加入选择")) {
+        const std::string manual_iid = iid;
+        const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const actions::Item& item) {
+            return item.iid == manual_iid;
+        });
+        if (manual_iid.rfind("IID_", 0) != 0 || manual_iid.size() > 256 ||
+            manual_iid.size() < 5 || selected_items.size() >= 25)
+            notify(m, "请填写有效的 IID；一次最多选择 25 种物品。", true);
+        else if (found != catalog.end() && !found->can_add)
+            notify(m, "游戏拒绝这个编号直接入库；怪物专属条目可在单独分类查看。", true);
+        else {
+            selected_items.emplace(manual_iid, manual_iid);
+            iid[0] = '\0';
+        }
+    }
+    ImGui::Text("已选择 %zu 种物品", selected_items.size());
+    if (!selected_items.empty()) {
+        std::string remove_iid;
+        if (ImGui::BeginChild("##selected_items", ImVec2(0, px(110)), ImGuiChildFlags_Borders)) {
+            for (const auto& [key, name] : selected_items) {
+                ImGui::PushID(key.c_str());
+                if (ImGui::SmallButton("移除")) remove_iid = key;
+                ImGui::SameLine();
+                ImGui::TextUnformatted((name + "  (" + key + ")").c_str());
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndChild();
+        if (!remove_iid.empty()) selected_items.erase(remove_iid);
+        if (ImGui::Button("清空选择")) selected_items.clear();
+    }
+    ImGui::InputInt("每种物品的数量", &quantity);
+    quantity = std::clamp(quantity, 1, 500);
+    ImGui::TextDisabled("每种最多 500 件；游戏自身的奖励不受影响。任务物品请只添加所需数量。");
+    if (ImGui::Button("直接将所选物品加入背包")) {
+        std::vector<actions::ItemRequest> batch;
+        for (const auto& [key, name] : selected_items) batch.push_back({key, quantity});
+        if (!actions::queue_items(batch, true)) notify(m, "请先选择有效的物品和数量。", true);
+        else notify(m, "已提交直接入库请求，请查看背包。 ");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("取消添加物品")) actions::cancel_item();
+    ImGui::TextWrapped("%s", actions::item_status().c_str());
+
+    section("下次送礼支援值");
+    ImGui::InputInt("送礼获得的支援值", &gift_amount);
+    gift_amount = std::clamp(gift_amount, 1, 50000);
+    if (ImGui::Button("应用于下次送礼")) {
+        if (actions::queue_gift(gift_amount)) notify(m, "送礼支援值调整已排队。");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("取消送礼调整")) actions::cancel_gift();
+    ImGui::TextWrapped("%s", actions::gift_status().c_str());
 }
 
 std::string ini_now(const IniKey& k) { return config_get_str(k.sec, k.key, k.def); }
@@ -1152,7 +1890,7 @@ void controls_page(UiHost& host, Menu& m, const play::LiveStatus& live) {
 
 // ---- Game -------------------------------------------------------------------------------------------------------------------------------
 // The languages the game ships (games/fefw/fefw_data.cpp), by the names the settings service reads (services/common.cpp). "" is Automatic.
-// ImGui's font has no CJK glyphs, so the names are English.
+// Keep these language option names in English for consistency with the other settings pages.
 constexpr const char* kLangNames[] = {"Automatic (Windows language)", "English (US)",   "English (UK)",           "Japanese",
                                       "French",                       "French (Canada)", "German",                 "Italian",
                                       "Spanish (Spain)",              "Spanish (Latin America)", "Korean",         "Chinese (Simplified)",
@@ -1454,6 +2192,9 @@ void settings_menu(play::UiHost& host, gfx::Overlay& ov) {
                     case kTabAudio: audio_page(host, m); break;
                     case kTabControls: controls_page(host, m, live); break;
                     case kTabGame: game_page(host, m); break;
+                    case kTabCoreMods: coremods_page(m); break;
+                    case kTabGrowth: character_growth_page(m); break;
+                    case kTabActions: actions_page(m); break;
                     case kTabDebug: debug_page(host, m, ov); break;
                 }
                 ImGui::PopItemWidth();
@@ -1468,6 +2209,7 @@ void settings_menu(play::UiHost& host, gfx::Overlay& ov) {
         ImGui::Separator();
         ImGui::PushTextWrapPos(0.f);
         if (!m.help.empty()) ImGui::TextUnformatted(tr(m.help.c_str()));
+        else if (m.tab == kTabGrowth) ImGui::TextDisabled("成长方式与全局补正立即保存到本机设置；人物独立补正随游戏内保存写入当前存档。");
         else ImGui::TextDisabled(tr("Changes apply at once and are saved. Rows marked restart apply when the game starts again."));
         ImGui::PopTextWrapPos();
         ImGui::SetCursorPosY(ImGui::GetWindowHeight() - ImGui::GetStyle().WindowPadding.y - ImGui::GetFrameHeight());
@@ -1478,6 +2220,9 @@ void settings_menu(play::UiHost& host, gfx::Overlay& ov) {
         } else if (!waits.empty()) {
             ImGui::AlignTextToFramePadding();
             ImGui::TextColored(kOrange, tr("Restart the game to apply: %s"), waits.c_str());
+        } else if (m.tab == kTabGrowth) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("全局设置已保存；人物独立补正设置后请在游戏内保存。");
         } else {
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled(tr("Saved to %s and %s"), config_file_path().c_str(), host.settings_path().c_str());

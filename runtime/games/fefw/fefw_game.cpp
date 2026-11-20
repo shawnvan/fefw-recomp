@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Fire Emblem: Fortune's Weave: the whole game module as one nxrt::game::Info (fefw_game.h). Play-mode hooks come here as they are found.
 #include "fefw_game.h"
+#include "fefw_coremods.h"
+#include "fefw_actions.h"
+#include "fefw_manual.h"
 
 #include <string>
 #include <vector>
@@ -95,10 +98,16 @@ constexpr uint64_t kPresentWrapper = 0x5d170;
 void install_all(uint64_t base, play::GameHost* host, const play::Settings& s) {
     play_install(base, host, s);
     mouse_install(base);
+    coremods::install(base);
+    manual::install(base);
+    actions::install(base);
     prompts_install(host);
 }
 void remove_all() {
     prompts_remove();
+    actions::remove();
+    manual::remove();
+    coremods::remove();
     play_remove();
 }
 void frame_all(bool, double, play::GameFrame*) {

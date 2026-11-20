@@ -19,6 +19,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -191,6 +193,7 @@ struct Overlay::Impl {
     float ui_scale = 0.f;             // 0: not applied yet
     bool backend_ready = false;
     std::atomic<bool> visible{false};
+    std::atomic<bool> text_input_requested{false};
     std::mutex mu;                    // guards the ImGui context: events arrive on the game's main thread, drawing happens on the presenting thread
     int toggle_sc = SDL_SCANCODE_F1;
     bool restore_relative = false;
@@ -457,7 +460,10 @@ std::unique_ptr<Overlay> Overlay::create(const Context& ctx, std::string* error)
     {
         std::string font = config_get_str("gfx", "ui_font", "");
         std::string lang = config_get_str("gfx", "ui_language", "auto");
-        const bool wants_cjk = !(lang.empty() || lang == "auto" || lang == "en" || lang == "en-US") || !font.empty();
+        // This CoreMods build draws Chinese labels on its first launch, before
+        // a [coremods] section exists. Keep a CJK face available regardless of
+        // the selected language or whether settings have been saved yet.
+        const bool wants_cjk = true;
         std::string chosen;
         if (wants_cjk) {
             const auto exists = [](const std::string& p) {
@@ -887,6 +893,9 @@ uint64_t Overlay::set_keyboard_pad(uint64_t buttons, int lx, int ly) {
 bool Overlay::wants_input() const { return impl_->visible && imgui_wants(impl_->mu, impl_->imgui, true, true); }
 bool Overlay::wants_mouse() const { return impl_->visible && imgui_wants(impl_->mu, impl_->imgui, true, false); }
 bool Overlay::wants_keyboard() const { return impl_->visible && imgui_wants(impl_->mu, impl_->imgui, false, true); }
+bool Overlay::wants_text_input() const {
+    return impl_->visible.load(std::memory_order_relaxed) && impl_->text_input_requested.load(std::memory_order_relaxed);
+}
 
 void Overlay::add_panel(const std::string& title, std::function<void()> fn) { impl_->panels.push_back({title, std::move(fn)}); }
 void Overlay::set_menu(std::function<void()> fn) { impl_->menu = std::move(fn); }
@@ -1191,6 +1200,7 @@ void Overlay::draw(const FrameInfo& f) {
         dl->AddPolyline(poly, 7, IM_COL32(0, 0, 0, 255), ImDrawFlags_Closed, 1.5f * k);
     }
     ImGui::Render();
+    s.text_input_requested.store(s.visible && !kb_on && io.WantTextInput, std::memory_order_relaxed);
 
     // one dynamic-rendering pass that draws the ImGui draw data into view
     auto render_into = [&](VkImageView view, VkAttachmentLoadOp load) {

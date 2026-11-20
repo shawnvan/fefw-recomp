@@ -216,9 +216,17 @@ void translate(const SDL_Event& ev) {
         }
 
         case SDL_EVENT_TEXT_INPUT: {
-            input::Event e = make_event(input::EventType::Text, ts);
-            copy_utf8(e.u.text.utf8, sizeof e.u.text.utf8, ev.text.text);
-            input::queue_push(e);
+            // An IME may commit a whole phrase in one event; the input queue's
+            // short text payload needs one UTF-8-safe event per chunk.
+            const char* remaining = ev.text.text;
+            while (remaining && *remaining) {
+                input::Event e = make_event(input::EventType::Text, ts);
+                copy_utf8(e.u.text.utf8, sizeof e.u.text.utf8, remaining);
+                const size_t count = std::strlen(e.u.text.utf8);
+                if (!count) break;
+                input::queue_push(e);
+                remaining += count;
+            }
             break;
         }
 
