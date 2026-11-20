@@ -47,6 +47,28 @@ endif()
 file(GLOB_RECURSE NXRT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 list(FILTER NXRT_SOURCES EXCLUDE REGEX "/src/gfx/")   # the graphics shell is its own library (cmake/gfx.cmake)
 add_library(nxrt STATIC ${NXRT_SOURCES})
+# The build id: the git commit this source tree was at when CMake configured it ("-dirty" when there were uncommitted
+# changes, "unknown" outside a checkout). Embedded by src/core/build_info.cpp (nxrt::build_id), printed in fefw.log's
+# first line, and read out of fefw_rt.dll by public-release/build_package.py, which refuses to package a payload whose
+# commit is not the tree being packaged. Captured at configure time on purpose: committing after configuring makes the
+# next package run fail until CMake configures again.
+set(NXRT_BUILD_ID "unknown")
+find_package(Git QUIET)
+if(Git_FOUND)
+    execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+                    OUTPUT_VARIABLE _nxrt_build_commit OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _nxrt_git_ok ERROR_QUIET)
+    if(_nxrt_git_ok EQUAL 0)
+        set(NXRT_BUILD_ID "${_nxrt_build_commit}")
+        execute_process(COMMAND ${GIT_EXECUTABLE} status --porcelain
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+                        OUTPUT_VARIABLE _nxrt_tree_state OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(NOT "${_nxrt_tree_state}" STREQUAL "")
+            set(NXRT_BUILD_ID "${NXRT_BUILD_ID}-dirty")
+        endif()
+    endif()
+endif()
+target_compile_definitions(nxrt PRIVATE NXRT_BUILD_ID=${NXRT_BUILD_ID})
 target_include_directories(nxrt PUBLIC include)
 if(EXISTS "${NXRT_RECOMP_INCLUDE}")
     target_include_directories(nxrt PUBLIC "${NXRT_RECOMP_INCLUDE}")

@@ -4,8 +4,8 @@ FEFW CoreMods 0.2.8 使用说明
 
 1. 确认你使用的是官方 fefw-recomp 0.2.8 Windows 版，并已用自己的游戏更新 131072 完成 Set up。退出游戏和启动器，先备份要保留的存档。
 2. 解压整个压缩包，把 CoreMods-public 文件夹放在 fefw-launcher.exe 旁边，运行其中的 install.cmd。安装器会核对版本、保存原文件，并在本机重建 fefw.exe。
-3. 已装过同版本 CoreMods 的用户，同样先退出游戏，替换整个 CoreMods-public 文件夹后运行新的 install.cmd。安装器会留下更新前的程序备份，并重新生成物品中文目录。不要沿用另一个转译器版本的包。
-4. 进游戏按 F1 打开设置。想卸载时先退出游戏，再运行 CoreMods-public\uninstall.cmd；存档不会随卸载删除。
+3. 已装过 CoreMods 的用户（同为 0.2.8 基座的任意构建），同样先退出游戏，替换整个 CoreMods-public 文件夹后运行新的 install.cmd。安装器会凭本机的安装记录识别旧安装，留下更新前的程序备份，并重新生成物品中文目录。不要沿用另一个转译器版本的包。
+4. 进游戏按 F1 打开设置。想卸载时先退出游戏，再运行 CoreMods-public\uninstall.cmd；存档不会随卸载删除。若卸载最后一步的本机重建失败，安装器会把 CoreMods 文件原样放回，游戏仍可运行，修好重建问题后再次运行卸载即可。
 
 常用设置
 

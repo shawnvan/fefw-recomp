@@ -64,6 +64,15 @@ function Previous-ModVersion {
     foreach ($version in $previousModVersions) {
         if ((Same $site $version.site) -and (Same $runtime $version.runtime)) { return $version }
     }
+    # Any other CoreMods build of this same official base (two 0.2.8 builds need not know each other's hashes):
+    # the installation record says what was installed and that its official backup is this package's official pair.
+    if (Test-Path -LiteralPath $manifest -PathType Leaf) {
+        try { $record = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json } catch { return $null }
+        if ($record.official_site -eq $officialSite -and $record.official_runtime -eq $officialRuntime -and
+            (Same $site $record.mod_site) -and (Same $runtime $record.mod_runtime)) {
+            return @{ site = [string]$record.mod_site; runtime = [string]$record.mod_runtime }
+        }
+    }
     return $null
 }
 function Full-InputPath([string]$value, [string]$label) {
@@ -423,7 +432,7 @@ if ($Mode -eq 'Install') {
 }
 
 Need $manifest
-if (-not $SourceExefs) { Fail 'SOURCE_EXEFS_NOT_FOUND' "Original ExeFS was not found near $GameRoot" 'Find exefs\main in your original update 131072 dump and pass that exefs folder with -SourceExefs <folder>.' }
+if (-not $SourceExefs) { Fail 'SOURCE_EXEFS_NOT_FOUND' "Original ExeFS was not found near $GameRoot" 'Find exefs\main in your original update 131072 dump and pass that exefs folder with -SourceExefs <that exefs folder>.' }
 $saved = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
 if (-not (Same $site $modSite) -or -not (Same $runtime $modRuntime)) {
     throw 'CoreMods files changed since installation. Uninstall stopped to preserve your edits.'
@@ -437,12 +446,43 @@ if (-not (Same (Join-Path $backup 'main.sites') $officialSite) -or
     -not (Same (Join-Path $backup 'fefw_rt.dll') $officialRuntime)) {
     throw 'Original backups failed verification. Uninstall stopped.'
 }
-Copy-Item -LiteralPath (Join-Path $backup 'main.sites') -Destination $site -Force
-Copy-Item -LiteralPath (Join-Path $backup 'fefw_rt.dll') -Destination $runtime -Force
-if ($saved.had_catalog) { Copy-Item -LiteralPath (Join-Path $backup 'items.json') -Destination $catalog -Force }
-elseif (Test-Path -LiteralPath $catalog) { Remove-Item -LiteralPath $catalog -Force }
-Write-Output 'Official runtime files restored. Rebuilding the original game locally...'
-& $python -I $builder --exefs $SourceExefs --game $GameRoot
-if ($LASTEXITCODE -ne 0) { throw 'Original files restored, but the local rebuild failed. Run Set up in the official launcher.' }
+# Snapshot everything the steps below replace, so a failed rebuild puts the installation back exactly as it was
+# (a half-uninstalled mix of official runtime files and a CoreMods-built fefw.exe cannot run, and could not be
+# uninstalled again: the official-file check would answer "not installed").
+$rollback = Join-Path $env:TEMP ('fefw-coremods-uninstall-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $rollback | Out-Null
+try {
+    Copy-Item -LiteralPath $site -Destination (Join-Path $rollback 'main.sites')
+    Copy-Item -LiteralPath $runtime -Destination (Join-Path $rollback 'fefw_rt.dll')
+    if (Test-Path -LiteralPath $catalog -PathType Leaf) { Copy-Item -LiteralPath $catalog -Destination (Join-Path $rollback 'items.json') }
+    if (Test-Path -LiteralPath (Join-Path $GameRoot 'fefw.exe') -PathType Leaf) {
+        Copy-Item -LiteralPath (Join-Path $GameRoot 'fefw.exe') -Destination (Join-Path $rollback 'fefw.exe')
+    }
+    Copy-Item -LiteralPath (Join-Path $backup 'main.sites') -Destination $site -Force
+    Copy-Item -LiteralPath (Join-Path $backup 'fefw_rt.dll') -Destination $runtime -Force
+    if ($saved.had_catalog) { Copy-Item -LiteralPath (Join-Path $backup 'items.json') -Destination $catalog -Force }
+    elseif (Test-Path -LiteralPath $catalog) { Remove-Item -LiteralPath $catalog -Force }
+    Write-Output 'Official runtime files restored. Rebuilding the original game locally...'
+    & $python -I $builder --exefs $SourceExefs --game $GameRoot
+    if ($LASTEXITCODE -ne 0) { throw 'UninstallRebuildFailed' }
+} catch {
+    # Put the CoreMods files back: the installation stays consistent and uninstall can simply be run again.
+    Copy-Item -LiteralPath (Join-Path $rollback 'main.sites') -Destination $site -Force
+    Copy-Item -LiteralPath (Join-Path $rollback 'fefw_rt.dll') -Destination $runtime -Force
+    if (Test-Path -LiteralPath (Join-Path $rollback 'items.json') -PathType Leaf) {
+        Copy-Item -LiteralPath (Join-Path $rollback 'items.json') -Destination $catalog -Force
+    } elseif (-not $saved.had_catalog -and (Test-Path -LiteralPath $catalog)) {
+        Remove-Item -LiteralPath $catalog -Force
+    }
+    if (Test-Path -LiteralPath (Join-Path $rollback 'fefw.exe') -PathType Leaf) {
+        Copy-Item -LiteralPath (Join-Path $rollback 'fefw.exe') -Destination (Join-Path $GameRoot 'fefw.exe') -Force
+    }
+    if ($_.ToString() -eq 'UninstallRebuildFailed') {
+        throw "Official files were restored, but the local rebuild failed. The CoreMods files were put back unchanged,`nso the game still runs and uninstall can be retried once the rebuild problem is fixed (see its output above)."
+    }
+    throw
+} finally {
+    Remove-Item -LiteralPath $rollback -Recurse -Force -ErrorAction SilentlyContinue
+}
 $oldBackup = Archive-Backup 'uninstalled'
 Write-Output "CoreMods removed. Backup retained at $oldBackup"

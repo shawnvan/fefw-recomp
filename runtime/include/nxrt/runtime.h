@@ -25,5 +25,6 @@ void shutdown();
 std::string summary();
 bool initialised();
 const char* abi_source();   // which ABI header the runtime was built against
+const char* build_id();     // "fefw-recomp-build:<git commit>[-dirty]": the source tree the runtime was configured from
 
 }  // namespace nxrt

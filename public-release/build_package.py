@@ -28,6 +28,26 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def source_commit() -> str:
+    """The commit of the tree being packaged; refuses a dirty tree (the payload must be reproducible from it)."""
+    status = subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).decode().strip()
+    if status:
+        raise RuntimeError(f"The source tree has uncommitted changes:\n{status}\nCommit them before packaging.")
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
+
+
+def payload_build_id(dll: Path) -> str:
+    """The build id embedded in fefw_rt.dll (runtime build_info.cpp; 'unknown' when configured outside a checkout)."""
+    data = dll.read_bytes()
+    marker = data.find(b"fefw-recomp-build:")
+    if marker < 0:
+        raise RuntimeError("fefw_rt.dll carries no build id: reconfigure CMake and rebuild (runtime/CMakeLists.txt embeds it)")
+    end = marker
+    while end < len(data) and 0x20 <= data[end] < 0x7f:
+        end += 1
+    return data[marker + len(b"fefw-recomp-build:"):end].decode("ascii")
+
+
 def check(path: Path) -> bytes:
     data = path.read_bytes()
     if path.name.lower() in BANNED_NAMES or path.suffix.lower() in BANNED_SUFFIXES:
@@ -53,6 +73,15 @@ def main() -> None:
         raise RuntimeError("AV1 assembly objects are missing")
     if not DLL.is_file() or not SITES.is_file():
         raise RuntimeError(f"Built payload missing: build fefw_rt.dll (FEFW_RT_DLL=ON) first")
+
+    # The payload must be a build of THIS tree: the git commit embedded in fefw_rt.dll at configure time has to be the
+    # commit being packaged, and the tree has to be clean. A DLL left over from an older build fails here.
+    commit = source_commit()
+    embedded = payload_build_id(DLL)
+    if embedded != commit:
+        raise RuntimeError(f"fefw_rt.dll was built from {embedded!r}, but the tree being packaged is {commit!r}. "
+                           "Reconfigure CMake and rebuild the runtime, then package again.")
+    print(f"payload bound to source commit {commit}")
 
     mod_site, mod_runtime = sha256(SITES), sha256(DLL)
     installer = INSTALLER.read_text(encoding="utf-8")

@@ -44,7 +44,7 @@ bool init(const InitOptions& opt) {
     LogOptions lo;
     lo.path = opt.log_path;
     log_init(lo);
-    NXLOG_I("runtime", "nxrt starting (ABI %s)", abi_source());
+    NXLOG_I("runtime", "nxrt starting (ABI %s, build %s)", abi_source(), build_id());
     if (opt.load_symbols) {
         size_t n = symbols_load_map();
         NXLOG_I("runtime", "host symbols: %zu from the linker map%s%s", n, n ? " " : " (no map next to the exe or in its PDB's folder: host frames show module+offset only)", n ? symbols_map_path().c_str() : "");
