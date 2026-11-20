@@ -133,6 +133,19 @@ Other distributions need the equivalent packages. In WSL2 the Windows `PATH` is 
 `/mnt/...` entries, because `linuxdeploy` (the AppImage step) crashes on an unreadable one. Build from a checkout on the Linux
 filesystem (`~/fefw-recomp`), not `/mnt/c/...`: it is much faster.
 
+## Packaging CoreMods for Windows
+
+On Windows, install the native C++ build tools listed above, Python 3, and NASM 2.14+. Run this from the repository root after
+committing the source changes you want to release.
+
+```powershell
+python public-release/build_package.py
+```
+
+The script checks out that commit in a temporary clone, fetches the pinned texture dependencies, and builds `fefw_rt.dll` with
+AV1 assembly enabled. It verifies the DLL's build ID and writes the installer and source ZIPs to `work/packages`. The published
+installer builds the game from the player's own dump during installation.
+
 ## Reading crash reports
 
 The release build of `fefw_rt.dll` also writes `fefw_rt.pdb` (the DLL records only its bare name). The release workflow checks it

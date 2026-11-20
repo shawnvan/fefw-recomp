@@ -60,6 +60,57 @@ function Verify-OfficialRuntime {
     $runtimeHash = if (Test-Path -LiteralPath $runtime -PathType Leaf) { Sha $runtime } else { 'MISSING' }
     Fail 'RUNTIME_MISMATCH' "The runtime files are not the supported clean official 0.2.8 files.`nHook file: $site`nHook SHA-256: $siteHash`nRuntime file: $runtime`nRuntime SHA-256: $runtimeHash" 'Use the official 0.2.8 launcher and complete Set up in a separate clean folder, then install CoreMods there. MODHOST or other modified runtime files cannot be combined by changing RomFS/ExeFS paths. Keep your save folder backed up.'
 }
+
+# Capture the installed program and the builder's live outputs before changing them. The builder's
+# build/state.json and intermediate files stay together as its own cache, independently of build/done.json.
+function Save-InstallSnapshot([string]$folder) {
+    New-Item -ItemType Directory -Path $folder | Out-Null
+    foreach ($relative in $installFiles) {
+        $path = Join-Path $GameRoot $relative
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        Need $path
+        $copy = Join-Path $folder $relative
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $copy)) | Out-Null
+        Copy-Item -LiteralPath $path -Destination $copy
+    }
+}
+function Restore-InstallSnapshot([string]$folder) {
+    foreach ($relative in $installFiles) {
+        $path = Join-Path $GameRoot $relative
+        $copy = Join-Path $folder $relative
+        if (Test-Path -LiteralPath $copy -PathType Leaf) {
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $path)) | Out-Null
+            Copy-Item -LiteralPath $copy -Destination $path -Force
+        } elseif (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -Force
+        }
+    }
+}
+function Invoke-InstallTransaction([string]$folder, [scriptblock]$operation, [scriptblock]$afterRollback, [switch]$KeepSnapshot) {
+    $keep = $false
+    try {
+        Save-InstallSnapshot $folder
+        # Keep the completed snapshot if execution is interrupted before either commit or rollback finishes.
+        $keep = $true
+        try {
+            & $operation
+            $keep = $KeepSnapshot.IsPresent
+        } catch {
+            $failure = $_
+            try {
+                Restore-InstallSnapshot $folder
+                if ($afterRollback) { & $afterRollback }
+                $keep = $false
+            } catch {
+                throw "Operation failed: $failure`nRollback failed: $_`nRecovery snapshot retained at $folder"
+            }
+            throw $failure
+        }
+    } finally {
+        if (-not $keep) { Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Previous-ModVersion {
     foreach ($version in $previousModVersions) {
         if ((Same $site $version.site) -and (Same $runtime $version.runtime)) { return $version }
@@ -180,17 +231,25 @@ if (-not $GameRoot) {
 $GameRoot = Full-InputPath $GameRoot 'GameRoot'
 if ($Romfs) { $Romfs = Full-InputPath $Romfs 'RomFS' }
 if ($SourceExefs) { $SourceExefs = Full-InputPath $SourceExefs 'SourceExefs' }
-$site = Join-Path $GameRoot 'tools\build\recomp\games\fefw\main.sites'
+$sitePath = 'tools\build\recomp\games\fefw\main.sites'
+$catalogPath = 'mods\item-add\items.json'
+$backupName = 'CoreMods-public-backup-0.2.8'
+$manifestPath = Join-Path $backupName 'manifest.json'
+$site = Join-Path $GameRoot $sitePath
 $runtime = Join-Path $GameRoot 'fefw_rt.dll'
-$catalog = Join-Path $GameRoot 'mods\item-add\items.json'
-$backup = Join-Path $GameRoot 'CoreMods-public-backup-0.2.8'
+$catalog = Join-Path $GameRoot $catalogPath
+$backup = Join-Path $GameRoot $backupName
 $previousBackup = Join-Path $GameRoot 'CoreMods-public-backup'
-$manifest = Join-Path $backup 'manifest.json'
+$manifest = Join-Path $GameRoot $manifestPath
 $payloadSite = Join-Path $PSScriptRoot 'payload\main.sites'
 $payloadRuntime = Join-Path $PSScriptRoot 'payload\fefw_rt.dll'
 $python = Join-Path $GameRoot 'tools\python\python.exe'
 $builder = Join-Path $GameRoot 'tools\build\fefw_build.py'
 $exefs = Join-Path $GameRoot 'exefs'
+$gameExe = Join-Path $GameRoot 'fefw.exe'
+# The live ExeFS filenames are the 0.2.8 builder's EXEFS_FILES. Other files in exefs are left alone.
+$installFiles = @($sitePath, 'fefw_rt.dll', $catalogPath, 'fefw.exe', 'fefw.sites', 'build\done.json', $manifestPath,
+    'exefs\main', 'exefs\sdk', 'exefs\subsdk0', 'exefs\subsdk1', 'exefs\subsdk2', 'exefs\rtld', 'exefs\main.npdm')
 
 Need (Join-Path $GameRoot 'fefw-launcher.exe')
 Need $site
@@ -203,7 +262,6 @@ if ($releaseLine -notmatch 'fefw-recomp 0\.2\.8') {
     Fail 'LAUNCHER_VERSION' "This launcher is not identified as fefw-recomp 0.2.8.`nREADME version line: $releaseLine`nGame folder: $GameRoot" 'Install the official fefw-recomp 0.2.8 release in a separate folder and run Set up before installing CoreMods.'
 }
 if ($Mode -notin @('Check', 'Locate')) {
-    $gameExe = Join-Path $GameRoot 'fefw.exe'
     $runningHere = Get-CimInstance Win32_Process -Filter "name = 'fefw.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($gameExe, [StringComparison]::OrdinalIgnoreCase) }
     if ($runningHere) { throw 'Close this installation of the game before changing CoreMods.' }
@@ -306,49 +364,25 @@ if ($Mode -eq 'Install' -and (Previous-ModVersion)) {
         throw 'Previous CoreMods files or backup do not match. No changes made.'
     }
     $tempCatalog = Join-Path $env:TEMP ('fefw-catalog-' + [Guid]::NewGuid().ToString('N') + '.json')
-    & $python -I (Join-Path $PSScriptRoot 'generate_catalog.py') --romfs $Romfs --output $tempCatalog
-    if ($LASTEXITCODE -ne 0) { throw 'Item catalog generation failed; no game files were changed.' }
-    $rows = Get-Content -LiteralPath $tempCatalog -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($rows.Count -lt 1300) { throw 'Item catalog is incomplete; no game files were changed.' }
-    $upgradeBackup = Join-Path $GameRoot ('CoreMods-public-backup-0.2.8-before-update-' + [Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $upgradeBackup | Out-Null
-    $hadExe = Test-Path -LiteralPath (Join-Path $GameRoot 'fefw.exe') -PathType Leaf
     try {
-        Copy-Item -LiteralPath $site -Destination (Join-Path $upgradeBackup 'main.sites')
-        Copy-Item -LiteralPath $runtime -Destination (Join-Path $upgradeBackup 'fefw_rt.dll')
-        Copy-Item -LiteralPath $manifest -Destination (Join-Path $upgradeBackup 'manifest.json')
-        Copy-Item -LiteralPath $catalog -Destination (Join-Path $upgradeBackup 'items.json')
-        if ($hadExe) { Copy-Item -LiteralPath (Join-Path $GameRoot 'fefw.exe') -Destination (Join-Path $upgradeBackup 'fefw.exe') }
-        Copy-Item -LiteralPath $payloadSite -Destination $site -Force
-        Copy-Item -LiteralPath $payloadRuntime -Destination $runtime -Force
-        Copy-Item -LiteralPath $tempCatalog -Destination $catalog -Force
-        Write-Output 'Updating CoreMods. Rebuilding the game locally...'
-        & $python -I $builder --exefs $SourceExefs --game $GameRoot
-        if ($LASTEXITCODE -ne 0) { throw 'Local rebuild failed.' }
-        $saved.mod_site = $modSite
-        $saved.mod_runtime = $modRuntime
-        $saved.catalog_hash = Sha $catalog
-        $saved | ConvertTo-Json | Set-Content -LiteralPath $manifest -Encoding utf8
+        & $python -I (Join-Path $PSScriptRoot 'generate_catalog.py') --romfs $Romfs --output $tempCatalog
+        if ($LASTEXITCODE -ne 0) { throw 'Item catalog generation failed; no game files were changed.' }
+        $rows = Get-Content -LiteralPath $tempCatalog -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($rows.Count -lt 1300) { throw 'Item catalog is incomplete; no game files were changed.' }
+        $upgradeBackup = Join-Path $GameRoot ($backupName + '-before-update-' + [Guid]::NewGuid().ToString('N'))
+        Invoke-InstallTransaction -folder $upgradeBackup -KeepSnapshot -operation {
+            Copy-Item -LiteralPath $payloadSite -Destination $site -Force
+            Copy-Item -LiteralPath $payloadRuntime -Destination $runtime -Force
+            Copy-Item -LiteralPath $tempCatalog -Destination $catalog -Force
+            Write-Output 'Updating CoreMods. Rebuilding the game locally...'
+            & $python -I $builder --exefs $SourceExefs --game $GameRoot
+            if ($LASTEXITCODE -ne 0) { throw 'Local rebuild failed during the CoreMods update.' }
+            $saved.mod_site = $modSite
+            $saved.mod_runtime = $modRuntime
+            $saved.catalog_hash = Sha $catalog
+            $saved | ConvertTo-Json | Set-Content -LiteralPath $manifest -Encoding utf8
+        }
         Write-Output "CoreMods 0.2.8 updated. Previous program kept at $upgradeBackup"
-    } catch {
-        if (Test-Path -LiteralPath (Join-Path $upgradeBackup 'main.sites') -PathType Leaf) {
-            Copy-Item -LiteralPath (Join-Path $upgradeBackup 'main.sites') -Destination $site -Force
-        }
-        if (Test-Path -LiteralPath (Join-Path $upgradeBackup 'fefw_rt.dll') -PathType Leaf) {
-            Copy-Item -LiteralPath (Join-Path $upgradeBackup 'fefw_rt.dll') -Destination $runtime -Force
-        }
-        if (Test-Path -LiteralPath (Join-Path $upgradeBackup 'manifest.json') -PathType Leaf) {
-            Copy-Item -LiteralPath (Join-Path $upgradeBackup 'manifest.json') -Destination $manifest -Force
-        }
-        if (Test-Path -LiteralPath (Join-Path $upgradeBackup 'items.json') -PathType Leaf) {
-            Copy-Item -LiteralPath (Join-Path $upgradeBackup 'items.json') -Destination $catalog -Force
-        }
-        if (Test-Path -LiteralPath (Join-Path $upgradeBackup 'fefw.exe') -PathType Leaf) {
-            Copy-Item -LiteralPath (Join-Path $upgradeBackup 'fefw.exe') -Destination (Join-Path $GameRoot 'fefw.exe') -Force
-        } elseif (-not $hadExe -and (Test-Path -LiteralPath (Join-Path $GameRoot 'fefw.exe') -PathType Leaf)) {
-            Remove-Item -LiteralPath (Join-Path $GameRoot 'fefw.exe') -Force
-        }
-        throw
     } finally {
         Remove-Item -LiteralPath $tempCatalog -Force -ErrorAction SilentlyContinue
     }
@@ -373,58 +407,43 @@ if ($Mode -eq 'Install') {
         if ($LASTEXITCODE -ne 0) { throw 'Item catalog generation failed; no game files were changed.' }
         $rows = Get-Content -LiteralPath $tempCatalog -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($rows.Count -lt 1300) { throw 'Item catalog is incomplete; no game files were changed.' }
-        New-Item -ItemType Directory -Path $backup | Out-Null
-        Copy-Item -LiteralPath $site -Destination (Join-Path $backup 'main.sites')
-        Copy-Item -LiteralPath $runtime -Destination (Join-Path $backup 'fefw_rt.dll')
-        $gameExe = Join-Path $GameRoot 'fefw.exe'
-        $hadExecutable = Test-Path -LiteralPath $gameExe -PathType Leaf
-        if ($hadExecutable) { Copy-Item -LiteralPath $gameExe -Destination (Join-Path $backup 'fefw.exe') }
-        if (-not $SourceExefs) {
-            $SourceExefs = Join-Path $backup 'build-exefs'
-            Copy-Item -LiteralPath $exefs -Destination $SourceExefs -Recurse
+        $rollback = Join-Path $env:TEMP ('fefw-coremods-install-' + [Guid]::NewGuid().ToString('N'))
+        Invoke-InstallTransaction -folder $rollback -operation {
+            New-Item -ItemType Directory -Path $backup | Out-Null
+            Copy-Item -LiteralPath $site -Destination (Join-Path $backup 'main.sites')
+            Copy-Item -LiteralPath $runtime -Destination (Join-Path $backup 'fefw_rt.dll')
+            $hadExecutable = Test-Path -LiteralPath $gameExe -PathType Leaf
+            if ($hadExecutable) { Copy-Item -LiteralPath $gameExe -Destination (Join-Path $backup 'fefw.exe') }
+            $rebuildSource = $SourceExefs
+            if (-not $rebuildSource) {
+                $rebuildSource = Join-Path $backup 'build-exefs'
+                Copy-Item -LiteralPath $exefs -Destination $rebuildSource -Recurse
+            }
+            $hadCatalog = Test-Path -LiteralPath $catalog -PathType Leaf
+            if ($hadCatalog) { Copy-Item -LiteralPath $catalog -Destination (Join-Path $backup 'items.json') }
+            @{
+                version = 2; official_site = $officialSite; official_runtime = $officialRuntime
+                mod_site = $modSite; mod_runtime = $modRuntime; had_catalog = $hadCatalog
+                had_executable = $hadExecutable; catalog_hash = (Sha $tempCatalog)
+            } | ConvertTo-Json | Set-Content -LiteralPath $manifest -Encoding utf8
+            Copy-Item -LiteralPath $payloadSite -Destination $site -Force
+            Copy-Item -LiteralPath $payloadRuntime -Destination $runtime -Force
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $catalog) | Out-Null
+            Copy-Item -LiteralPath $tempCatalog -Destination $catalog -Force
+            Write-Output 'CoreMods files installed. Rebuilding the game locally from your own files...'
+            & $python -I $builder --exefs $rebuildSource --game $GameRoot
+            if ($LASTEXITCODE -ne 0) { throw 'Local rebuild failed during CoreMods installation.' }
+        } -afterRollback {
+            if (Test-Path -LiteralPath $backup -PathType Container) {
+                $failedBackup = Archive-Backup 'failed'
+                Write-Warning "Original files restored. Diagnostic backup kept at $failedBackup"
+            }
         }
-        $hadCatalog = Test-Path -LiteralPath $catalog -PathType Leaf
-        if ($hadCatalog) { Copy-Item -LiteralPath $catalog -Destination (Join-Path $backup 'items.json') }
-        @{
-            version = 2; official_site = $officialSite; official_runtime = $officialRuntime
-            mod_site = $modSite; mod_runtime = $modRuntime; had_catalog = $hadCatalog
-            had_executable = $hadExecutable; catalog_hash = (Sha $tempCatalog)
-        } | ConvertTo-Json | Set-Content -LiteralPath $manifest -Encoding utf8
-        Copy-Item -LiteralPath $payloadSite -Destination $site -Force
-        Copy-Item -LiteralPath $payloadRuntime -Destination $runtime -Force
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $catalog) | Out-Null
-        Copy-Item -LiteralPath $tempCatalog -Destination $catalog -Force
-        Write-Output 'CoreMods files installed. Rebuilding the game locally from your own files...'
-        & $python -I $builder --exefs $SourceExefs --game $GameRoot
-        if ($LASTEXITCODE -ne 0) { throw 'Local rebuild failed. Original runtime files will be restored.' }
         if (Test-Path -LiteralPath (Join-Path $previousBackup 'manifest.json')) {
             Write-Output 'CoreMods 0.2.8 installed over an updated older installation. The previous backup was kept.'
         } else {
             Write-Output 'CoreMods 0.2.8 installed. Your saves and game dump were not copied into the package.'
         }
-    } catch {
-        if (Test-Path -LiteralPath $manifest) {
-            Copy-Item -LiteralPath (Join-Path $backup 'main.sites') -Destination $site -Force
-            Copy-Item -LiteralPath (Join-Path $backup 'fefw_rt.dll') -Destination $runtime -Force
-            if (Test-Path -LiteralPath (Join-Path $backup 'fefw.exe') -PathType Leaf) {
-                Copy-Item -LiteralPath (Join-Path $backup 'fefw.exe') -Destination (Join-Path $GameRoot 'fefw.exe') -Force
-            } elseif (Test-Path -LiteralPath (Join-Path $GameRoot 'fefw.exe') -PathType Leaf) {
-                Remove-Item -LiteralPath (Join-Path $GameRoot 'fefw.exe') -Force
-            }
-            if (Test-Path -LiteralPath (Join-Path $backup 'items.json')) {
-                Copy-Item -LiteralPath (Join-Path $backup 'items.json') -Destination $catalog -Force
-            } elseif (Test-Path -LiteralPath $catalog) {
-                Remove-Item -LiteralPath $catalog -Force
-            }
-            if ((Same $site $officialSite) -and (Same $runtime $officialRuntime)) {
-                $failedBackup = Archive-Backup 'failed'
-                Write-Warning "Original files restored. Diagnostic backup kept at $failedBackup"
-            }
-        } elseif (Test-Path -LiteralPath $backup) {
-            $failedBackup = Archive-Backup 'incomplete'
-            Write-Warning "Installation stopped before changing the runtime. Incomplete backup kept at $failedBackup"
-        }
-        throw
     } finally {
         Remove-Item -LiteralPath $tempCatalog -Force -ErrorAction SilentlyContinue
     }
@@ -446,43 +465,23 @@ if (-not (Same (Join-Path $backup 'main.sites') $officialSite) -or
     -not (Same (Join-Path $backup 'fefw_rt.dll') $officialRuntime)) {
     throw 'Original backups failed verification. Uninstall stopped.'
 }
-# Snapshot everything the steps below replace, so a failed rebuild puts the installation back exactly as it was
-# (a half-uninstalled mix of official runtime files and a CoreMods-built fefw.exe cannot run, and could not be
-# uninstalled again: the official-file check would answer "not installed").
+$originalCatalog = Join-Path $backup 'items.json'
+if ($saved.had_catalog) { Need $originalCatalog }
 $rollback = Join-Path $env:TEMP ('fefw-coremods-uninstall-' + [Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $rollback | Out-Null
-try {
-    Copy-Item -LiteralPath $site -Destination (Join-Path $rollback 'main.sites')
-    Copy-Item -LiteralPath $runtime -Destination (Join-Path $rollback 'fefw_rt.dll')
-    if (Test-Path -LiteralPath $catalog -PathType Leaf) { Copy-Item -LiteralPath $catalog -Destination (Join-Path $rollback 'items.json') }
-    if (Test-Path -LiteralPath (Join-Path $GameRoot 'fefw.exe') -PathType Leaf) {
-        Copy-Item -LiteralPath (Join-Path $GameRoot 'fefw.exe') -Destination (Join-Path $rollback 'fefw.exe')
-    }
+Invoke-InstallTransaction -folder $rollback -operation {
     Copy-Item -LiteralPath (Join-Path $backup 'main.sites') -Destination $site -Force
     Copy-Item -LiteralPath (Join-Path $backup 'fefw_rt.dll') -Destination $runtime -Force
-    if ($saved.had_catalog) { Copy-Item -LiteralPath (Join-Path $backup 'items.json') -Destination $catalog -Force }
-    elseif (Test-Path -LiteralPath $catalog) { Remove-Item -LiteralPath $catalog -Force }
-    Write-Output 'Official runtime files restored. Rebuilding the original game locally...'
-    & $python -I $builder --exefs $SourceExefs --game $GameRoot
-    if ($LASTEXITCODE -ne 0) { throw 'UninstallRebuildFailed' }
-} catch {
-    # Put the CoreMods files back: the installation stays consistent and uninstall can simply be run again.
-    Copy-Item -LiteralPath (Join-Path $rollback 'main.sites') -Destination $site -Force
-    Copy-Item -LiteralPath (Join-Path $rollback 'fefw_rt.dll') -Destination $runtime -Force
-    if (Test-Path -LiteralPath (Join-Path $rollback 'items.json') -PathType Leaf) {
-        Copy-Item -LiteralPath (Join-Path $rollback 'items.json') -Destination $catalog -Force
-    } elseif (-not $saved.had_catalog -and (Test-Path -LiteralPath $catalog)) {
+    if ($saved.had_catalog) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $catalog) | Out-Null
+        Copy-Item -LiteralPath $originalCatalog -Destination $catalog -Force
+    } elseif (Test-Path -LiteralPath $catalog -PathType Leaf) {
         Remove-Item -LiteralPath $catalog -Force
     }
-    if (Test-Path -LiteralPath (Join-Path $rollback 'fefw.exe') -PathType Leaf) {
-        Copy-Item -LiteralPath (Join-Path $rollback 'fefw.exe') -Destination (Join-Path $GameRoot 'fefw.exe') -Force
-    }
-    if ($_.ToString() -eq 'UninstallRebuildFailed') {
-        throw "Official files were restored, but the local rebuild failed. The CoreMods files were put back unchanged,`nso the game still runs and uninstall can be retried once the rebuild problem is fixed (see its output above)."
-    }
-    throw
-} finally {
-    Remove-Item -LiteralPath $rollback -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Output 'Official runtime files restored. Rebuilding the original game locally...'
+    & $python -I $builder --exefs $SourceExefs --game $GameRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Local rebuild failed during CoreMods uninstall.' }
+    $oldBackup = Archive-Backup 'uninstalled'
+    Write-Output "CoreMods removed. Backup retained at $oldBackup"
+} -afterRollback {
+    Write-Warning 'The installed CoreMods files were restored. Fix the error and run uninstall.cmd again.'
 }
-$oldBackup = Archive-Backup 'uninstalled'
-Write-Output "CoreMods removed. Backup retained at $oldBackup"
