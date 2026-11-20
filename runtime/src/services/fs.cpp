@@ -457,31 +457,38 @@ std::shared_ptr<fs::RomfsImage> rom_image() {
             overlays.push_back(m.romfs);
         }
     }
-    // code mods' file edits (nxrt/mod_api.h edit_file): applied to the tree with the RomFS mods laid over it
+    // code mods' file edits (nxrt/mod_api.h edit_file): applied to the tree with the RomFS mods laid over it. Their contract is one
+    // edit per file per launch, so they run on the final build only (see the deployment overlay below).
     fs::RomfsEdits edits;
     edits.wants = &modapi::file_edit_wanted;
     edits.edit = &modapi::file_edit_run;
-    if (!img->build(dir, &err, overlays, modapi::file_edits_close() ? &edits : nullptr)) {
+    const bool editors = modapi::file_edits_close();   // closes registration: the DLL mods registered theirs as they loaded
+    // CoreMods' deployment overlay ([coremods] deployment_limit, 7..25) extends the game's own Dispos files — the ones after the
+    // player's RomFS mods, before any code-mod edit: a DLL's edit of a Dispos file would otherwise end up inside the generated
+    // overlay and be applied a second time when the final image is built.
+    bool need_final = true;
+    if (profile().program_id == 0x04007EF01F8AE000ull) {
+        const int target = static_cast<int>(config_get_int("coremods", "deployment_limit", 6));
+        if (target > 6 && target <= 25) {
+            // Probe build without the editors: fefw_deployment_overlay reads the Dispos files through this image.
+            if (!img->build(dir, &err, overlays)) {
+                NXLOG_E("fs", "RomFS folder '%s' cannot be served: %s (set [fs] romfs)", dir.c_str(), err.c_str());
+                st().rom_failed = true;
+                return nullptr;
+            }
+            const std::string generated = fefw_deployment_overlay(*img, dir, overlays, target);
+            if (!generated.empty()) {
+                overlays.push_back(generated);
+                img = std::make_shared<fs::RomfsImage>();   // laid out again below, with the generated overlay and the editors
+            } else if (!editors) {
+                need_final = false;   // nothing to add: the probe image is the final one
+            }
+        }
+    }
+    if (need_final && !img->build(dir, &err, overlays, editors ? &edits : nullptr)) {
         NXLOG_E("fs", "RomFS folder '%s' cannot be served: %s (set [fs] romfs)", dir.c_str(), err.c_str());
         st().rom_failed = true;
         return nullptr;
-    }
-    if (profile().program_id == 0x04007EF01F8AE000ull) {
-        const int target = static_cast<int>(config_get_int("coremods", "deployment_limit", 6));
-        const std::string generated = fefw_deployment_overlay(*img, dir, overlays, target);
-        if (!generated.empty()) {
-            auto expanded = std::make_shared<fs::RomfsImage>();
-            auto final_overlays = overlays;
-            final_overlays.push_back(generated);
-            std::string expand_error;
-            // Re-apply the code mods' file edits (if any) to the expanded tree, as the first build did.
-            if (expanded->build(dir, &expand_error, final_overlays, modapi::file_edits_close() ? &edits : nullptr)) {
-                img = std::move(expanded);
-                overlays = std::move(final_overlays);
-            } else {
-                NXLOG_W("coremods", "deployment overlay was not applied: %s", expand_error.c_str());
-            }
-        }
     }
     // Weapon art availability is built from Job.bin while the game loads it.
     // Apply this before that read, after the player's normal RomFS overlays.

@@ -662,6 +662,19 @@ bool RomfsImage::read(uint64_t offset, void* dst, uint64_t len) const {
     if (!L.built || offset > L.size || len > L.size - offset) return false;
     if (len == 0) return true;
     uint8_t* out = static_cast<uint8_t*>(dst);
+    // set_file_byte_patches' replacements, applied to whatever a read put in `out` — the host file's bytes (kFile) or a code
+    // mod's edited content (kMem). A patch whose expected byte differs (the content changed some other way) is skipped.
+    const auto apply_patches = [&](uint32_t file, uint64_t within, uint8_t* out, uint64_t n) {
+        if (file >= p_->file_patches.size()) return;
+        const mem::ww::OsWriteScope ws(out, n);
+        const auto& patches = p_->file_patches[file];
+        auto patch = std::lower_bound(patches.begin(), patches.end(), within,
+                                      [](const BytePatch& p, uint64_t v) { return p.offset < v; });
+        for (; patch != patches.end() && patch->offset - within < n; ++patch) {
+            uint8_t& byte = out[patch->offset - within];
+            if (byte == patch->expected) byte = patch->replacement;
+        }
+    };
     auto it = std::upper_bound(L.segs.begin(), L.segs.end(), offset,
                                [](uint64_t v, const Segment& g) { return v < g.off; });
     size_t i = static_cast<size_t>(it - L.segs.begin()) - 1;
@@ -676,20 +689,12 @@ bool RomfsImage::read(uint64_t offset, void* dst, uint64_t len) const {
             case Segment::Kind::kFile:
                 p_->note_read(g.file);
                 if (!p_->read_host(g.file, g.src + within, out, n)) return false;
-                if (g.file < p_->file_patches.size()) {
-                    const mem::ww::OsWriteScope ws(out, n);
-                    const auto& patches = p_->file_patches[g.file];
-                    auto patch = std::lower_bound(patches.begin(), patches.end(), within,
-                                                  [](const BytePatch& p, uint64_t v) { return p.offset < v; });
-                    for (; patch != patches.end() && patch->offset - within < n; ++patch) {
-                        uint8_t& byte = out[patch->offset - within];
-                        if (byte == patch->expected) byte = patch->replacement;
-                    }
-                }
+                apply_patches(g.file, within, out, n);
                 break;
             case Segment::Kind::kMem:
                 p_->note_read(g.file);
                 std::memcpy(out, L.files[g.file].mem->data() + within, n);
+                apply_patches(g.file, within, out, n);
                 break;
         }
         out += n;

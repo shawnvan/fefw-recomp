@@ -1,0 +1,20 @@
+FEFW CoreMods 0.2.8-dev 故障处理
+
+安装前必须在官方 0.2.8 文件夹完成 Set up，并退出游戏和启动器。安装器只识别该版本纯净的 fefw_rt.dll 与 tools\build\recomp\games\fefw\main.sites。RUNTIME_MISMATCH 表示其中至少一个文件不匹配；请保留旧目录，使用新的纯净 0.2.8 副本测试，勿手工混用不同版本的 DLL 或挂钩文件。
+
+LAUNCHER_VERSION：当前文件夹不是官方 0.2.8。BUILT_MAIN_MISSING：尚未完成 Set up。SOURCE_MAIN_VERSION：原始游戏更新文件不是受支持的 131072。ROMFS_NOT_FOUND 或 SOURCE_EXEFS_NOT_FOUND：安装器未找到你自己的游戏文件。
+
+可在 CoreMods-public 文件夹运行以下只读定位命令：
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\Install.ps1" -Mode Locate
+
+若游戏文件位于别处，可运行：
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\Install.ps1" -Mode Install -Romfs "D:\游戏解包\romfs" -SourceExefs "D:\游戏解包\exefs"
+请替换为真实路径。SourceExefs 指原始更新包中的 exefs，不是测试版根目录里构建出的 exefs。安装器会核验原始 main 文件。
+
+安装后若 F1 菜单显示英文，在测试副本的 fefw.ini 中确认 [gfx] 段有 ui_language = zh，并确认 locales\zh.ini 存在。旧版配置不要整体覆盖新版配置。游戏本身的中文由游戏自己的语言设置控制。
+
+安装失败时，请提供完整错误代码、What to do 提示、使用的压缩包名称及 fefw.log 的相关末尾内容；无需发送游戏本体或存档。
+
+English
+
+Finish Set up in a clean official 0.2.8 folder and close the game and launcher before installing. RUNTIME_MISMATCH means fefw_rt.dll or main.sites differs from the checked official release. Use a clean 0.2.8 test copy; do not mix runtime files from different versions. BUILT_MAIN_MISSING means Set up has not finished. SOURCE_MAIN_VERSION means the game update is not the supported 131072. Use -Mode Locate to inspect detected paths, or pass -Romfs and -SourceExefs as shown above. The latter must point to the original game dump, not the built exefs in the PC installation. For a Chinese F1 menu, set ui_language = zh under [gfx] and keep locales\zh.ini.

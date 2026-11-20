@@ -1,0 +1,36 @@
+FEFW CoreMods 0.2.8 来源与授权说明
+整理日期：2026-11-20
+
+本包是基于 fefw-recomp 0.2.8（Goldoire 原作 v0.2.0 之后的社区延续版）制作的非官方修改版。延续版地址：https://github.com/metrist38/fefw-recomp （v0.2.8）；原项目地址：https://github.com/Goldoire/fefw-recomp/tree/v0.2.0 。原项目的代码、署名和许可不因本包而改变；本包不主张拥有原项目。新增的 F1 核心设置、物品分类和 PC 运行组件中的功能实现属于本修改版的改动。修改版按 GPL-3.0-or-later 提供，并附上对应源码、许可文本和第三方声明。源码包位于 CoreMods-public 文件夹中的 source.zip。
+
+物品添加与“下一次送礼调整”参考了 FEFW Tool portable v1.0.0 的研究成果：游戏函数入口、物品 ID 的哈希方法和操作流程。该工具的作者署名依据使用者提供的信息，记为 B 站“桃園奈”：https://space.bilibili.com/8292668/ ，相关视频：https://www.bilibili.com/video/BV1nj4x6rENH/ 。本修改版在 PC 运行组件中实现这些功能；安装包没有包含该作者的 Python 脚本或 0.1.5 Modhost 程序。收到的工具压缩包没有独立许可文件，本包的 GPL 声明不替该作者的作品授权。这里的致谢不表示该作者参与或认可本修改版。
+
+倍率和成长等数值功能由本修改版在 PC 运行组件中编写；游戏调用位置及计算规则参考了使用者提供的 Eden 技术资料。
+
+本版独立人物成长、超难选项和职业精通分类的设计参考了使用者提供的“我画猪猪 0.26.1”Mod 文件及版本记录。仅分析其功能、符号和补丁位置，本包没有执行或收录该 Mod 的程序、补丁与转译工具；这里的参考不表示原作者参与或认可本修改版。
+
+《火焰纹章》、Nintendo 等名称仅用于说明兼容对象。游戏本体、商标及素材的权利归各自权利人。本包与任天堂、Intelligent Systems、Goldoire 的官方项目维护者及上述工具作者均无隶属、赞助或背书关系。
+
+本包不包含游戏程序、游戏资源、密钥、存档、着色器缓存或从玩家游戏文件生成的物品目录。玩家需自行准备有权使用的游戏文件，并在自己的电脑上完成生成。请勿分享本机生成的 fefw.exe、物品目录、游戏文件或存档。以上是项目来源与分发范围说明，不是法律风险为零的保证。
+
+本修改版是纯个人、为爱发电的项目，作者不收费，也不接受任何形式的打赏或捐赠。如果想表达支持，请把钱用于公益，或留给自己和有需要的人改善生活。请勿简单搬运、二次上传或倒卖本包；严禁冒充本项目或原项目的官方发布者，或以作者名义收款。本项目没有任何收费渠道，也不为第三方版本、交易或收款背书。自行发布修改版的人，应自行处理许可、署名、对应源码和所分发内容涉及的其他权利；夹带无权分发的游戏文件或误导用户所造成的后果，由实施者自行承担。本段表达作者的发布立场，不变更上文所列的软件许可。
+
+English
+
+FEFW CoreMods 0.2.8 provenance and licensing
+Prepared: 2026-11-20
+
+This package is an unofficial modification based on fefw-recomp 0.2.8, the community continuation of Goldoire's v0.2.0: https://github.com/metrist38/fefw-recomp (v0.2.8); original: https://github.com/Goldoire/fefw-recomp/tree/v0.2.0 . Their code, attribution, and licenses remain in effect; this package does not claim ownership of the original project. The added F1 core settings, item categories, and functionality implemented in the PC runtime are changes made for this modification. The modified project is offered under GPL-3.0-or-later, with corresponding source, license text, and third-party notices. The source archive is CoreMods-public\source.zip.
+
+The item-add and “next gift adjustment” features drew on research in FEFW Tool portable v1.0.0, including game function entry points, the item-ID hashing method, and the operation flow. Based on information provided by a user, we credit its author as the Bilibili creator 桃園奈: https://space.bilibili.com/8292668/ . Related video: https://www.bilibili.com/video/BV1nj4x6rENH/ . This modification implements the features in the PC runtime. It does not include that author's Python scripts or the 0.1.5 Modhost program. The tool archive we received had no separate license file. The GPL statement for this package does not grant rights to that author's work. This credit does not imply that the author contributed to or endorses this modification.
+
+The multiplier and growth features were written for this modification in the PC runtime. Game call sites and calculation rules were checked against user-provided Eden technical materials.
+
+The per-character growth settings, Lunatic menu option, and separate class mastery category were informed by the user-supplied "我画猪猪 0.26.1" mod archive and its version notes. We inspected its described behavior, symbols, and patch locations. This package does not execute or include that mod's binaries, patches, or adaptation tool. This reference does not imply its author's participation or endorsement.
+
+Fire Emblem, Nintendo, and related names are used only to identify compatibility. Rights to the game, trademarks, and assets belong to their respective owners. This package is not affiliated with, sponsored by, or endorsed by Nintendo, Intelligent Systems, Goldoire or the official project maintainers, or the above tool creator.
+
+This package does not contain the game program, game assets, keys, saves, shader caches, or an item catalog generated from a player's game files. Players must provide game files they are entitled to use and complete the build on their own computers. Do not share a locally generated fefw.exe, item catalog, game files, or saves. This describes the project's provenance and distribution scope; it is not a guarantee of zero legal risk.
+
+This modification is a personal, volunteer project. Its author does not charge for it and accepts no tips or donations of any kind. If you wish to show support, please give to charity or use the money to improve life for yourself or someone in need. Please do not simply mirror, reupload, or resell this package. Do not impersonate this project or the original project, or collect money in the author's name. This project has no payment channel and does not endorse third-party copies, transactions, or fundraising. Anyone who publishes a modified copy is responsible for the applicable licenses, attribution, corresponding source, and any other rights implicated by what they distribute. Those who bundle game files without permission or mislead users bear responsibility for their own conduct. This paragraph states the author's publishing position and does not change the software license described above.
+
