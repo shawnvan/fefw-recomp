@@ -53,6 +53,10 @@ public:
     Stats stats() const;
     // Image offset and size of a file by its path inside the image ("/a/b.bin", case sensitive), for tests and logs. False when absent.
     bool file_extent(const std::string& path, uint64_t* offset, uint64_t* size) const;
+    // Replace selected bytes as the game reads a file. Patches are relative to the
+    // file, and apply only when the source byte still matches `expected`.
+    struct BytePatch { uint64_t offset; uint8_t expected; uint8_t replacement; };
+    bool set_file_byte_patches(const std::string& path, std::vector<BytePatch> patches);
 
 private:
     struct Impl;

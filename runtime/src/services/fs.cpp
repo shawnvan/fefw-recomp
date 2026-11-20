@@ -23,6 +23,7 @@
 #include <sstream>
 
 #include "fs_romfs.h"
+#include "fefw_deployment.h"
 #include "nxrt/nup.h"
 #include "fs_volume.h"
 #include "nxrt/config.h"
@@ -31,6 +32,7 @@
 #include "nxrt/log.h"
 #include "nxrt/services_api.h"
 #include "services_internal.h"
+#include "../../games/fefw/fefw_weapon_scope.h"
 
 namespace stdfs = std::filesystem;
 
@@ -463,6 +465,83 @@ std::shared_ptr<fs::RomfsImage> rom_image() {
         NXLOG_E("fs", "RomFS folder '%s' cannot be served: %s (set [fs] romfs)", dir.c_str(), err.c_str());
         st().rom_failed = true;
         return nullptr;
+    }
+    if (profile().program_id == 0x04007EF01F8AE000ull) {
+        const int target = static_cast<int>(config_get_int("coremods", "deployment_limit", 6));
+        const std::string generated = fefw_deployment_overlay(*img, dir, overlays, target);
+        if (!generated.empty()) {
+            auto expanded = std::make_shared<fs::RomfsImage>();
+            auto final_overlays = overlays;
+            final_overlays.push_back(generated);
+            std::string expand_error;
+            // Re-apply the code mods' file edits (if any) to the expanded tree, as the first build did.
+            if (expanded->build(dir, &expand_error, final_overlays, modapi::file_edits_close() ? &edits : nullptr)) {
+                img = std::move(expanded);
+                overlays = std::move(final_overlays);
+            } else {
+                NXLOG_W("coremods", "deployment overlay was not applied: %s", expand_error.c_str());
+            }
+        }
+    }
+    // Weapon art availability is built from Job.bin while the game loads it.
+    // Apply this before that read, after the player's normal RomFS overlays.
+    if (profile().program_id == 0x04007EF01F8AE000ull &&
+        config_get_bool("coremods", "remove_weapon_restrictions", false)) {
+        uint64_t image_offset = 0, file_size = 0;
+        if (img->file_extent("/GameData/Job.bin", &image_offset, &file_size) &&
+            file_size >= 0x10e0 && file_size <= 4 * 1024 * 1024) {
+            std::vector<uint8_t> job(static_cast<size_t>(file_size));
+            if (img->read(image_offset, job.data(), file_size)) {
+                auto u32 = [&](size_t at) { return static_cast<uint32_t>(job[at]) |
+                                               (static_cast<uint32_t>(job[at + 1]) << 8) |
+                                               (static_cast<uint32_t>(job[at + 2]) << 16) |
+                                               (static_cast<uint32_t>(job[at + 3]) << 24); };
+                auto u64 = [&](size_t at) {
+                    uint64_t value = 0;
+                    for (unsigned byte = 0; byte < 8; ++byte)
+                        value |= static_cast<uint64_t>(job[at + byte]) << (byte * 8);
+                    return value;
+                };
+                auto text = [&](size_t record, size_t field) -> std::string_view {
+                    const uint64_t pointer = u64(record + field);
+                    if (!pointer || pointer > file_size - 0x20) return {};
+                    const size_t begin = static_cast<size_t>(pointer + 0x20);
+                    size_t end = begin;
+                    while (end < job.size() && end - begin < 128 && job[end]) ++end;
+                    if (end == job.size() || end - begin == 128) return {};
+                    return {reinterpret_cast<const char*>(job.data() + begin), end - begin};
+                };
+                // The header's fourth word counts metadata entries, not Job records.
+                // Job records are contiguous and carry their sequential ID at +16.
+                if (u32(0) == file_size && 0x10e0ull + 0x230 <= file_size) {
+                    std::vector<fs::RomfsImage::BytePatch> patches;
+                    uint32_t count = 0, infantry_count = 0;
+                    for (uint32_t i = 0; i < 512 &&
+                                         0x10e0ull + (static_cast<uint64_t>(i) + 1) * 0x230 <= file_size; ++i) {
+                        const uint64_t record = 0x10e0ull + static_cast<uint64_t>(i) * 0x230;
+                        if (u32(record) != 0 || u32(record + 4) != 0 ||
+                            u32(record + 16) != 0x10000u + i) break;
+                        ++count;
+                        if (!games::fefw::weapon_scope::infantry(
+                                text(record, 0x38), text(record, 8), u64(record + 0x68) != 0))
+                            continue;
+                        ++infantry_count;
+                        for (uint32_t type = 0; type < 5; ++type) {
+                            const uint64_t at = record + 398 + type;
+                            if (job[at] == 0xff) patches.push_back({at, 0xff, 1});
+                        }
+                    }
+                    if (count && img->set_file_byte_patches("/GameData/Job.bin", std::move(patches)))
+                        NXLOG_I("coremods", "Job.bin infantry weapon permissions prepared (%u of %u Job records)", infantry_count, count);
+                    else if (!count)
+                        NXLOG_W("coremods", "Job.bin class records not found; weapon art load patch skipped");
+                } else {
+                    NXLOG_W("coremods", "Job.bin layout differs; weapon art load patch skipped");
+                }
+            }
+        } else {
+            NXLOG_W("coremods", "Job.bin not found in expected RomFS path; weapon art load patch skipped");
+        }
     }
     const fs::RomfsImage::Stats s = img->stats();
     NXLOG_I("fs", "RomFS image from %s: %u files, %u directories, %llu bytes of data, image size %llu", dir.c_str(), s.files, s.dirs,
